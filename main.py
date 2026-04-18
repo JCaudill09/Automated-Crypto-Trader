@@ -15,6 +15,10 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 
+# How often (in seconds) to refresh the list of available USDT pairs.
+SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
+
+
 def main():
     api_key = os.environ.get("KRAKEN_API_KEY")
     api_secret = os.environ.get("KRAKEN_API_SECRET")
@@ -33,8 +37,31 @@ def main():
 
     positions = {}  # symbol -> {"entry_price": float, "quantity": float}
 
+    # Discover all active USDT pairs from the exchange.  Fall back to the
+    # static list in config if the market-discovery call fails.
+    try:
+        symbols = bot.get_usdt_symbols()
+    except Exception as exc:
+        logging.warning(
+            "Could not load USDT pairs from exchange (%s). "
+            "Falling back to DEFAULT_SYMBOLS.",
+            exc,
+        )
+        symbols = list(config.DEFAULT_SYMBOLS)
+
+    last_symbol_refresh = time.monotonic()
+
     while True:
-        for symbol in config.DEFAULT_SYMBOLS:
+        # Refresh the symbol list once per hour so newly listed pairs are
+        # picked up automatically without restarting the bot.
+        if time.monotonic() - last_symbol_refresh >= SYMBOL_REFRESH_INTERVAL:
+            try:
+                symbols = bot.get_usdt_symbols()
+                last_symbol_refresh = time.monotonic()
+            except Exception as exc:
+                logging.warning("Symbol refresh failed (%s). Keeping current list.", exc)
+
+        for symbol in symbols:
             try:
                 if symbol not in positions:
                     if bot.should_buy(symbol):

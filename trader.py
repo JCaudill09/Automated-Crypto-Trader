@@ -197,6 +197,37 @@ class CryptoTrader:
     # Public API
     # ------------------------------------------------------------------
 
+    def get_usdt_symbols(self) -> list:
+        """
+        Return all active USDT-quoted trading pairs available on the exchange.
+
+        Calls ``exchange.load_markets()`` to fetch the full market list, then
+        filters to pairs whose quote currency is ``USDT`` and which are marked
+        active by the exchange.
+
+        Returns
+        -------
+        list[str]
+            Sorted list of symbols, e.g. ``["BTC/USDT", "ETH/USDT", ...]``.
+
+        Raises
+        ------
+        RuntimeError
+            If no active USDT pairs are found.
+        """
+        markets = self.exchange.load_markets()
+        symbols = sorted(
+            symbol
+            for symbol, market in markets.items()
+            if market.get("quote") == "USDT" and market.get("active", True)
+        )
+        if not symbols:
+            raise RuntimeError(
+                "No active USDT-quoted markets found on the exchange."
+            )
+        logger.info("get_usdt_symbols — found %d active USDT pairs", len(symbols))
+        return symbols
+
     def buy(self, symbol: str, amount_usd: float) -> dict:
         """
         Place a market buy order for *symbol* worth *amount_usd* USD.
