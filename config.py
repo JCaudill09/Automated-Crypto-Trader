@@ -25,6 +25,9 @@ RSI_PERIOD     = 14    # RSI look-back period (Wilder smoothing)
 RSI_OVERSOLD   = 30    # RSI below this level → oversold (potential buy)
 RSI_OVERBOUGHT = 70    # RSI above this level → overbought (potential sell)
 
+# How often (in seconds) to refresh the list of tradeable pairs from the exchange
+SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
+
 # Minimum 24-hour trading volume in quote currency (USD / USDT) required
 # before a buy order is placed or a buy signal is issued.  Markets below
 # this threshold are considered too illiquid to reliably fill or exit orders.
