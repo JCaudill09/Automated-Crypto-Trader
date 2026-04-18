@@ -24,7 +24,7 @@ pip install -r requirements.txt
 from trader import CryptoTrader
 
 # Paper trading is on by default (config.PAPER_TRADING = True)
-bot = CryptoTrader(exchange_id="coinbase")
+bot = CryptoTrader(exchange_id="kraken")
 
 # Buy $40 worth of BTC — simulated, no real order placed
 order = bot.buy("BTC/USDT", 40.0)
@@ -41,7 +41,7 @@ print(order)
 from trader import CryptoTrader
 
 bot = CryptoTrader(
-    exchange_id="coinbase",
+    exchange_id="kraken",
     api_key="YOUR_API_KEY",
     api_secret="YOUR_API_SECRET",
     paper_trading=False,   # enable real orders
@@ -57,7 +57,7 @@ order = bot.buy("BTC/USDT", 45.00)
 |---|---|---|
 | `MIN_BUY_ORDER` | `30.0` | Minimum buy order size in USD |
 | `MAX_BUY_ORDER` | `50.0` | Maximum buy order size in USD |
-| `DEFAULT_EXCHANGE` | `"coinbase"` | ccxt exchange identifier |
+| `DEFAULT_EXCHANGE` | `"kraken"` | ccxt exchange identifier |
 | `DEFAULT_SYMBOLS` | `["BTC/USDT", "ETH/USDT"]` | Trading pairs to monitor |
 | `PAPER_TRADING` | `True` | Simulate orders without spending real money |
 

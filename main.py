@@ -14,8 +14,8 @@ logging.basicConfig(
 def main():
     bot = CryptoTrader(
         exchange_id=config.DEFAULT_EXCHANGE,
-        api_key=os.environ["COINBASE_API_KEY"],
-        api_secret=os.environ["COINBASE_API_SECRET"],
+        api_key=os.environ["KRAKEN_API_KEY"],
+        api_secret=os.environ["KRAKEN_API_SECRET"],
         paper_trading=config.PAPER_TRADING,
     )
 

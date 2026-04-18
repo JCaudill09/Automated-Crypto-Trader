@@ -50,7 +50,7 @@ class CryptoTrader:
     Parameters
     ----------
     exchange_id : str
-        The ccxt exchange identifier (e.g. ``"coinbase"``, ``"binance"``).
+        The ccxt exchange identifier (e.g. ``"kraken"``, ``"binance"``).
     api_key : str, optional
         Exchange API key.  Not required in paper-trading mode.
     api_secret : str, optional
