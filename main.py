@@ -3,8 +3,12 @@ import logging
 import os
 import time
 
+from dotenv import load_dotenv
+
 from trader import CryptoTrader
 import config
+
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
