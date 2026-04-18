@@ -13,7 +13,7 @@ DEFAULT_EXCHANGE = "coinbase"
 DEFAULT_SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 
 # Paper trading mode — when True, no real orders are placed
-PAPER_TRADING = True
+PAPER_TRADING = False
 
 # Profit taking and stop loss (as fractions of entry price)
 TAKE_PROFIT_PCT = 0.075   # Close position when price rises 7.5 % above entry
