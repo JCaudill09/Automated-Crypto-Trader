@@ -86,7 +86,7 @@ def main():
             except Exception as e:
                 logging.error("Error on %s: %s", symbol, e)
 
-        time.sleep(300)  # check every 5 minutes
+        time.sleep(60)  # check every minute
 
 if __name__ == "__main__":
     main()
