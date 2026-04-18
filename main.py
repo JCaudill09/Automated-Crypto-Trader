@@ -16,7 +16,7 @@ logging.basicConfig(
 )
 
 # How often (in seconds) to refresh the list of available USDT pairs.
-SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
+SYMBOL_REFRESH_INTERVAL = config.SYMBOL_REFRESH_INTERVAL
 
 
 def main():
@@ -24,8 +24,9 @@ def main():
     api_secret = os.environ.get("KRAKEN_API_SECRET")
     if not api_key or not api_secret:
         raise EnvironmentError(
-            "KRAKEN_API_KEY and KRAKEN_API_SECRET must be set as environment variables. "
-            "Add them to your deployment platform's environment/secrets settings."
+            f"API credentials for '{config.DEFAULT_EXCHANGE}' are not set. "
+            "Provide them as environment variables (e.g. KRAKEN_API_KEY / KRAKEN_API_SECRET) "
+            "or in your deployment platform's secrets settings."
         )
 
     bot = CryptoTrader(
