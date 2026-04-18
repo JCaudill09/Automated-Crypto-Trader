@@ -471,8 +471,6 @@ class TestCheckExit(unittest.TestCase):
             self.trader.check_exit(self.SYMBOL, -100.0)
 
 
-
-
 # ---------------------------------------------------------------------------
 # Volume check tests
 # ---------------------------------------------------------------------------
@@ -587,6 +585,163 @@ class TestVolumeIntegration(unittest.TestCase):
         }
         self._bullish_indicators(trader)
         self.assertFalse(trader.should_buy(self.SYMBOL))
+
+
+# ---------------------------------------------------------------------------
+# USDT-pair validation tests
+# ---------------------------------------------------------------------------
+
+class TestValidateUsdtPair(unittest.TestCase):
+    def test_valid_usdt_pair_passes(self):
+        CryptoTrader._validate_usdt_pair("BTC/USDT")   # should not raise
+
+    def test_valid_eth_usdt_passes(self):
+        CryptoTrader._validate_usdt_pair("ETH/USDT")   # should not raise
+
+    def test_lowercase_usdt_passes(self):
+        CryptoTrader._validate_usdt_pair("btc/usdt")   # case-insensitive
+
+    def test_non_usdt_quote_raises(self):
+        with self.assertRaises(ValueError):
+            CryptoTrader._validate_usdt_pair("BTC/BTC")
+
+    def test_btc_usd_raises(self):
+        with self.assertRaises(ValueError):
+            CryptoTrader._validate_usdt_pair("BTC/USD")
+
+    def test_btc_busd_raises(self):
+        with self.assertRaises(ValueError):
+            CryptoTrader._validate_usdt_pair("BTC/BUSD")
+
+    def test_error_message_contains_symbol(self):
+        with self.assertRaises(ValueError) as ctx:
+            CryptoTrader._validate_usdt_pair("BTC/EUR")
+        self.assertIn("BTC/EUR", str(ctx.exception))
+
+    def test_buy_raises_for_non_usdt_pair(self):
+        trader = _make_trader()
+        with self.assertRaises(ValueError):
+            trader.buy("BTC/BTC", 40.0)
+        trader.exchange.create_market_buy_order.assert_not_called()
+
+    def test_sell_raises_for_non_usdt_pair(self):
+        trader = _make_trader()
+        with self.assertRaises(ValueError):
+            trader.sell("BTC/EUR", 0.01)
+        trader.exchange.create_market_sell_order.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# get_usdt_balance tests
+# ---------------------------------------------------------------------------
+
+class TestGetUsdtBalance(unittest.TestCase):
+    def setUp(self):
+        self.trader = _make_trader()
+
+    def _set_balance(self, free: float):
+        self.trader.exchange.fetch_balance.return_value = {
+            "USDT": {"free": free, "used": 0.0, "total": free}
+        }
+
+    def test_returns_free_usdt_balance(self):
+        self._set_balance(250.0)
+        self.assertAlmostEqual(self.trader.get_usdt_balance(), 250.0)
+
+    def test_returns_zero_balance(self):
+        self._set_balance(0.0)
+        self.assertAlmostEqual(self.trader.get_usdt_balance(), 0.0)
+
+    def test_raises_when_usdt_key_missing(self):
+        self.trader.exchange.fetch_balance.return_value = {}
+        with self.assertRaises(RuntimeError):
+            self.trader.get_usdt_balance()
+
+    def test_raises_when_free_key_missing(self):
+        self.trader.exchange.fetch_balance.return_value = {"USDT": {"total": 100.0}}
+        with self.assertRaises(RuntimeError):
+            self.trader.get_usdt_balance()
+
+
+# ---------------------------------------------------------------------------
+# buy_max_orders tests
+# ---------------------------------------------------------------------------
+
+def _set_ticker_and_balance(trader: CryptoTrader, price: float, usdt_free: float) -> None:
+    """Configure mocked exchange with a price ticker and a USDT balance."""
+    trader.exchange.fetch_ticker.return_value = {
+        "ask": price,
+        "last": price,
+        "quoteVolume": config.MIN_VOLUME_USD * 10,
+    }
+    trader.exchange.fetch_balance.return_value = {
+        "USDT": {"free": usdt_free, "used": 0.0, "total": usdt_free}
+    }
+
+
+class TestBuyMaxOrders(unittest.TestCase):
+    SYMBOL = "BTC/USDT"
+    PRICE = 50_000.0
+
+    def setUp(self):
+        self.trader = _make_trader()
+
+    def test_empty_list_when_balance_below_minimum(self):
+        _set_ticker_and_balance(self.trader, self.PRICE, config.MIN_BUY_ORDER - 0.01)
+        orders = self.trader.buy_max_orders(self.SYMBOL)
+        self.assertEqual(orders, [])
+
+    def test_one_order_when_balance_equals_max(self):
+        _set_ticker_and_balance(self.trader, self.PRICE, config.MAX_BUY_ORDER)
+        orders = self.trader.buy_max_orders(self.SYMBOL)
+        self.assertEqual(len(orders), 1)
+        self.assertEqual(orders[0]["side"], "buy")
+
+    def test_one_order_when_balance_between_min_and_max(self):
+        _set_ticker_and_balance(self.trader, self.PRICE, 35.0)
+        orders = self.trader.buy_max_orders(self.SYMBOL)
+        self.assertEqual(len(orders), 1)
+        self.assertAlmostEqual(orders[0]["cost"], 35.0)
+
+    def test_two_orders_when_balance_is_double_max(self):
+        _set_ticker_and_balance(self.trader, self.PRICE, config.MAX_BUY_ORDER * 2)
+        orders = self.trader.buy_max_orders(self.SYMBOL)
+        self.assertEqual(len(orders), 2)
+
+    def test_three_orders_when_balance_allows(self):
+        _set_ticker_and_balance(self.trader, self.PRICE, config.MAX_BUY_ORDER * 3)
+        orders = self.trader.buy_max_orders(self.SYMBOL)
+        self.assertEqual(len(orders), 3)
+
+    def test_remainder_below_min_is_skipped(self):
+        # balance = 2 * MAX + (MIN - 1) → 2 full orders, remainder too small
+        balance = config.MAX_BUY_ORDER * 2 + (config.MIN_BUY_ORDER - 1)
+        _set_ticker_and_balance(self.trader, self.PRICE, balance)
+        orders = self.trader.buy_max_orders(self.SYMBOL)
+        self.assertEqual(len(orders), 2)
+
+    def test_each_order_is_capped_at_max_buy_order(self):
+        _set_ticker_and_balance(self.trader, self.PRICE, 200.0)
+        orders = self.trader.buy_max_orders(self.SYMBOL)
+        for order in orders:
+            self.assertLessEqual(order["cost"], config.MAX_BUY_ORDER)
+
+    def test_all_orders_are_buy_side(self):
+        _set_ticker_and_balance(self.trader, self.PRICE, 150.0)
+        orders = self.trader.buy_max_orders(self.SYMBOL)
+        for order in orders:
+            self.assertEqual(order["side"], "buy")
+
+    def test_raises_for_non_usdt_symbol(self):
+        _set_ticker_and_balance(self.trader, self.PRICE, 200.0)
+        with self.assertRaises(ValueError):
+            self.trader.buy_max_orders("BTC/EUR")
+
+    def test_returns_paper_orders_in_paper_mode(self):
+        _set_ticker_and_balance(self.trader, self.PRICE, config.MAX_BUY_ORDER * 2)
+        orders = self.trader.buy_max_orders(self.SYMBOL)
+        for order in orders:
+            self.assertTrue(order.get("paper"))
 
 
 if __name__ == "__main__":

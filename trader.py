@@ -116,6 +116,30 @@ class CryptoTrader:
                 f"allowed amount of ${self.max_buy_order:.2f}."
             )
 
+    @staticmethod
+    def _validate_usdt_pair(symbol: str) -> None:
+        """
+        Raise :class:`ValueError` if *symbol* is not a USDT-quoted pair.
+
+        All buys are funded from USDT and all sells return proceeds to USDT,
+        so only pairs of the form ``"BASE/USDT"`` are accepted.
+
+        Parameters
+        ----------
+        symbol :
+            Trading pair, e.g. ``"BTC/USDT"``.
+
+        Raises
+        ------
+        ValueError
+            If *symbol* does not end with ``"/USDT"``.
+        """
+        if not symbol.upper().endswith("/USDT"):
+            raise ValueError(
+                f"Only USDT-quoted pairs are supported (e.g. 'BTC/USDT'), "
+                f"got '{symbol}'."
+            )
+
     def _get_price(self, symbol: str) -> float:
         """Return the current ask price for *symbol*."""
         ticker = self.exchange.fetch_ticker(symbol)
@@ -198,7 +222,10 @@ class CryptoTrader:
         InsufficientVolumeError
             If the 24-hour quote volume for *symbol* is below
             ``config.MIN_VOLUME_USD``.
+        ValueError
+            If *symbol* is not a USDT-quoted pair.
         """
+        self._validate_usdt_pair(symbol)
         self._validate_buy_amount(amount_usd)
         self._check_volume(symbol)
 
@@ -248,6 +275,8 @@ class CryptoTrader:
         if quantity <= 0:
             raise ValueError(f"Sell quantity must be positive, got {quantity}.")
 
+        self._validate_usdt_pair(symbol)
+
         price = self._get_price(symbol)
 
         logger.info(
@@ -271,6 +300,88 @@ class CryptoTrader:
             }
 
         return self.exchange.create_market_sell_order(symbol, quantity)
+
+    def get_usdt_balance(self) -> float:
+        """
+        Return the free USDT balance available on the exchange.
+
+        Returns
+        -------
+        float
+            Amount of free USDT available to spend on new buy orders.
+
+        Raises
+        ------
+        RuntimeError
+            If the exchange does not return a USDT balance entry.
+        """
+        balance = self.exchange.fetch_balance()
+        usdt = balance.get("USDT", {})
+        free = usdt.get("free")
+        if free is None:
+            raise RuntimeError(
+                "Unable to retrieve USDT balance from exchange. "
+                "The 'USDT.free' field is missing."
+            )
+        return float(free)
+
+    def buy_max_orders(self, symbol: str) -> list:
+        """
+        Place as many buy orders for *symbol* as the current USDT balance
+        allows.
+
+        Each order is sized at ``max_buy_order`` USD.  Orders are placed
+        until the remaining balance falls below ``min_buy_order``.  All
+        proceeds from sells flow back to USDT, so the balance is the single
+        source of funds for new buys.
+
+        Parameters
+        ----------
+        symbol :
+            USDT-quoted trading pair, e.g. ``"BTC/USDT"``.
+
+        Returns
+        -------
+        list[dict]
+            A list of order dicts — one entry per order placed.  Returns an
+            empty list when the USDT balance is below ``min_buy_order``.
+
+        Raises
+        ------
+        ValueError
+            If *symbol* is not a USDT-quoted pair.
+        """
+        self._validate_usdt_pair(symbol)
+
+        balance = self.get_usdt_balance()
+        orders = []
+
+        logger.info(
+            "buy_max_orders %s — USDT balance=%.2f max_per_order=%.2f",
+            symbol,
+            balance,
+            self.max_buy_order,
+        )
+
+        while balance >= self.min_buy_order:
+            order_size = min(self.max_buy_order, balance)
+            order = self.buy(symbol, order_size)
+            orders.append(order)
+            balance -= order_size
+            logger.info(
+                "buy_max_orders %s — placed order #%d ($%.2f), remaining balance=%.2f",
+                symbol,
+                len(orders),
+                order_size,
+                balance,
+            )
+
+        logger.info(
+            "buy_max_orders %s — placed %d order(s) total",
+            symbol,
+            len(orders),
+        )
+        return orders
 
     # ------------------------------------------------------------------
     # Technical indicators
