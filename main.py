@@ -16,10 +16,18 @@ logging.basicConfig(
 )
 
 def main():
+    api_key = os.environ.get("KRAKEN_API_KEY")
+    api_secret = os.environ.get("KRAKEN_API_SECRET")
+    if not api_key or not api_secret:
+        raise EnvironmentError(
+            "KRAKEN_API_KEY and KRAKEN_API_SECRET must be set as environment variables. "
+            "Add them to your deployment platform's environment/secrets settings."
+        )
+
     bot = CryptoTrader(
         exchange_id=config.DEFAULT_EXCHANGE,
-        api_key=os.environ["KRAKEN_API_KEY"],
-        api_secret=os.environ["KRAKEN_API_SECRET"],
+        api_key=api_key,
+        api_secret=api_secret,
         paper_trading=config.PAPER_TRADING,
     )
 
