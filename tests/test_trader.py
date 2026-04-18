@@ -19,12 +19,12 @@ from trader import CryptoTrader, OrderSizeError, InsufficientVolumeError
 def _make_trader(**kwargs) -> CryptoTrader:
     """Return a CryptoTrader whose underlying ccxt exchange is fully mocked."""
     defaults = dict(
-        exchange_id="coinbase",
+        exchange_id="kraken",
         paper_trading=True,
     )
     defaults.update(kwargs)
 
-    with patch("ccxt.coinbase") as mock_cls:
+    with patch("ccxt.kraken") as mock_cls:
         mock_exchange = MagicMock()
         mock_cls.return_value = mock_exchange
         trader = CryptoTrader(**defaults)
