@@ -19,7 +19,7 @@ def main():
         paper_trading=config.PAPER_TRADING,
     )
 
-    positions = {}  # symbol -> entry_price
+    positions = {}  # symbol -> {"entry_price": float, "quantity": float}
 
     while True:
         for symbol in config.DEFAULT_SYMBOLS:
@@ -27,13 +27,21 @@ def main():
                 if symbol not in positions:
                     if bot.should_buy(symbol):
                         order = bot.buy(symbol, config.MAX_BUY_ORDER)
-                        positions[symbol] = order["price"]
-                        logging.info("Opened position: %s @ %s", symbol, order["price"])
+                        positions[symbol] = {
+                            "entry_price": order["price"],
+                            "quantity": order["amount"],
+                        }
+                        logging.info("Opened position: %s @ %s qty=%s", symbol, order["price"], order["amount"])
                 else:
-                    result = bot.check_exit(symbol, positions[symbol])
+                    entry_price = positions[symbol]["entry_price"]
+                    result = bot.check_exit(symbol, entry_price)
                     if result in ("take_profit", "stop_loss"):
-                        # you'd need to track quantity here in a real bot
-                        logging.info("Exit signal (%s) for %s", result, symbol)
+                        quantity = positions[symbol]["quantity"]
+                        sell_order = bot.sell(symbol, quantity)
+                        logging.info(
+                            "Closed position (%s): %s qty=%s @ %s",
+                            result, symbol, quantity, sell_order.get("price"),
+                        )
                         del positions[symbol]
             except Exception as e:
                 logging.error("Error on %s: %s", symbol, e)
