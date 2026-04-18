@@ -84,6 +84,88 @@ class TestConfig(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Exchange ID normalisation tests
+# ---------------------------------------------------------------------------
+
+class TestExchangeIdNormalization(unittest.TestCase):
+    def _make_trader_with_id(self, exchange_id: str) -> CryptoTrader:
+        """Return a CryptoTrader constructed with the given exchange_id string."""
+        exchange_attr = exchange_id.lower()
+        with patch(f"ccxt.{exchange_attr}") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            trader = CryptoTrader(exchange_id=exchange_id, paper_trading=True)
+        return trader
+
+    def test_lowercase_exchange_id_accepted(self):
+        self._make_trader_with_id("coinbase")   # should not raise
+
+    def test_uppercase_exchange_id_normalised(self):
+        self._make_trader_with_id("Coinbase")   # should not raise
+
+    def test_allcaps_exchange_id_normalised(self):
+        self._make_trader_with_id("COINBASE")   # should not raise
+
+    def test_mixed_case_kraken_normalised(self):
+        self._make_trader_with_id("Kraken")     # reproduces the reported crash
+
+
+# ---------------------------------------------------------------------------
+# get_usdt_symbols tests
+# ---------------------------------------------------------------------------
+
+class TestGetUsdtSymbols(unittest.TestCase):
+    def setUp(self):
+        self.trader = _make_trader()
+
+    def _set_markets(self, markets: dict) -> None:
+        self.trader.exchange.load_markets.return_value = markets
+
+    def test_returns_only_usdt_pairs(self):
+        self._set_markets({
+            "BTC/USDT": {"quote": "USDT", "active": True},
+            "ETH/USDT": {"quote": "USDT", "active": True},
+            "BTC/BTC": {"quote": "BTC", "active": True},
+        })
+        symbols = self.trader.get_usdt_symbols()
+        self.assertIn("BTC/USDT", symbols)
+        self.assertIn("ETH/USDT", symbols)
+        self.assertNotIn("BTC/BTC", symbols)
+
+    def test_excludes_inactive_pairs(self):
+        self._set_markets({
+            "BTC/USDT": {"quote": "USDT", "active": True},
+            "XRP/USDT": {"quote": "USDT", "active": False},
+        })
+        symbols = self.trader.get_usdt_symbols()
+        self.assertIn("BTC/USDT", symbols)
+        self.assertNotIn("XRP/USDT", symbols)
+
+    def test_returns_sorted_list(self):
+        self._set_markets({
+            "SOL/USDT": {"quote": "USDT", "active": True},
+            "ADA/USDT": {"quote": "USDT", "active": True},
+            "BTC/USDT": {"quote": "USDT", "active": True},
+        })
+        symbols = self.trader.get_usdt_symbols()
+        self.assertEqual(symbols, sorted(symbols))
+
+    def test_raises_when_no_usdt_pairs_found(self):
+        self._set_markets({
+            "BTC/USD": {"quote": "USD", "active": True},
+        })
+        with self.assertRaises(RuntimeError):
+            self.trader.get_usdt_symbols()
+
+    def test_active_defaults_to_true_when_key_missing(self):
+        # Markets without an 'active' key should be included.
+        self._set_markets({
+            "DOT/USDT": {"quote": "USDT"},
+        })
+        symbols = self.trader.get_usdt_symbols()
+        self.assertIn("DOT/USDT", symbols)
+
+
+# ---------------------------------------------------------------------------
 # Order-limit validation tests
 # ---------------------------------------------------------------------------
 
