@@ -24,3 +24,8 @@ EMA_PERIOD     = 200   # 200-period Exponential Moving Average
 RSI_PERIOD     = 14    # RSI look-back period (Wilder smoothing)
 RSI_OVERSOLD   = 30    # RSI below this level → oversold (potential buy)
 RSI_OVERBOUGHT = 70    # RSI above this level → overbought (potential sell)
+
+# Minimum 24-hour trading volume in quote currency (USD / USDT) required
+# before a buy order is placed or a buy signal is issued.  Markets below
+# this threshold are considered too illiquid to reliably fill or exit orders.
+MIN_VOLUME_USD = 1_000_000.0
