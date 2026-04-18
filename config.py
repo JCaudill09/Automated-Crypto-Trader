@@ -31,4 +31,4 @@ SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
 # Minimum 24-hour trading volume in quote currency (USD / USDT) required
 # before a buy order is placed or a buy signal is issued.  Markets below
 # this threshold are considered too illiquid to reliably fill or exit orders.
-MIN_VOLUME_USD = 150_000.0
+MIN_VOLUME_USD = 70_000.0
