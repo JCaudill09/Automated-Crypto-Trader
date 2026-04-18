@@ -84,6 +84,32 @@ class TestConfig(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Exchange ID normalisation tests
+# ---------------------------------------------------------------------------
+
+class TestExchangeIdNormalization(unittest.TestCase):
+    def _make_trader_with_id(self, exchange_id: str) -> CryptoTrader:
+        """Return a CryptoTrader constructed with the given exchange_id string."""
+        exchange_attr = exchange_id.lower()
+        with patch(f"ccxt.{exchange_attr}") as mock_cls:
+            mock_cls.return_value = MagicMock()
+            trader = CryptoTrader(exchange_id=exchange_id, paper_trading=True)
+        return trader
+
+    def test_lowercase_exchange_id_accepted(self):
+        self._make_trader_with_id("coinbase")   # should not raise
+
+    def test_uppercase_exchange_id_normalised(self):
+        self._make_trader_with_id("Coinbase")   # should not raise
+
+    def test_allcaps_exchange_id_normalised(self):
+        self._make_trader_with_id("COINBASE")   # should not raise
+
+    def test_mixed_case_kraken_normalised(self):
+        self._make_trader_with_id("Kraken")     # reproduces the reported crash
+
+
+# ---------------------------------------------------------------------------
 # get_usdt_symbols tests
 # ---------------------------------------------------------------------------
 

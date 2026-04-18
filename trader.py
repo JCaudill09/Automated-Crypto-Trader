@@ -79,6 +79,7 @@ class CryptoTrader:
         self.min_buy_order = min_buy_order
         self.max_buy_order = max_buy_order
 
+        exchange_id = exchange_id.lower()
         exchange_class = getattr(ccxt, exchange_id)
         self.exchange: ccxt.Exchange = exchange_class(
             {
