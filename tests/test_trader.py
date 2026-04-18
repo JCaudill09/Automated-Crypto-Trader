@@ -38,6 +38,11 @@ def _set_price(trader: CryptoTrader, symbol: str, price: float) -> None:
     trader.exchange.fetch_ticker.return_value = {"ask": price, "last": price}
 
 
+def _make_ohlcv(closes: list) -> list:
+    """Build a minimal OHLCV list from a sequence of close prices."""
+    return [[0, 0, 0, 0, c, 0] for c in closes]
+
+
 # ---------------------------------------------------------------------------
 # Config tests
 # ---------------------------------------------------------------------------
@@ -51,6 +56,24 @@ class TestConfig(unittest.TestCase):
 
     def test_min_less_than_max(self):
         self.assertLess(config.MIN_BUY_ORDER, config.MAX_BUY_ORDER)
+
+    def test_take_profit_pct(self):
+        self.assertAlmostEqual(config.TAKE_PROFIT_PCT, 0.075)
+
+    def test_stop_loss_pct(self):
+        self.assertAlmostEqual(config.STOP_LOSS_PCT, 0.025)
+
+    def test_ema_period(self):
+        self.assertEqual(config.EMA_PERIOD, 200)
+
+    def test_rsi_period(self):
+        self.assertEqual(config.RSI_PERIOD, 14)
+
+    def test_rsi_oversold(self):
+        self.assertEqual(config.RSI_OVERSOLD, 30)
+
+    def test_rsi_overbought(self):
+        self.assertEqual(config.RSI_OVERBOUGHT, 70)
 
 
 # ---------------------------------------------------------------------------
@@ -217,8 +240,6 @@ class TestGetPrice(unittest.TestCase):
         self.assertEqual(price, 2000.0)
 
 
-
-
 class TestCustomLimits(unittest.TestCase):
     def test_custom_limits_are_respected(self):
         trader = _make_trader(min_buy_order=10.0, max_buy_order=20.0)
@@ -234,5 +255,209 @@ class TestCustomLimits(unittest.TestCase):
             trader._validate_buy_amount(21.0)
 
 
+# ---------------------------------------------------------------------------
+# EMA computation tests
+# ---------------------------------------------------------------------------
+
+class TestComputeEMA(unittest.TestCase):
+    def test_ema_equals_price_when_all_same(self):
+        closes = [100.0] * 10
+        ema = CryptoTrader._compute_ema(closes, period=5)
+        self.assertAlmostEqual(ema, 100.0, places=6)
+
+    def test_ema_tracks_rising_series(self):
+        closes = list(range(1, 21))  # 1 .. 20
+        ema = CryptoTrader._compute_ema(closes, period=5)
+        # EMA should be near the recent values (above the midpoint 10.5)
+        self.assertGreater(ema, 10.5)
+
+    def test_ema_tracks_falling_series(self):
+        closes = list(range(20, 0, -1))  # 20 .. 1
+        ema = CryptoTrader._compute_ema(closes, period=5)
+        self.assertLess(ema, 10.5)
+
+    def test_ema_raises_when_too_few_closes(self):
+        with self.assertRaises(ValueError):
+            CryptoTrader._compute_ema([100.0, 200.0], period=5)
+
+    def test_ema_exact_period_length(self):
+        closes = [10.0] * 5
+        ema = CryptoTrader._compute_ema(closes, period=5)
+        self.assertAlmostEqual(ema, 10.0, places=6)
+
+
+# ---------------------------------------------------------------------------
+# RSI computation tests
+# ---------------------------------------------------------------------------
+
+class TestComputeRSI(unittest.TestCase):
+    def test_rsi_all_gains_is_100(self):
+        # Strictly rising prices → no losses → RSI = 100
+        closes = [float(i) for i in range(1, 20)]
+        rsi = CryptoTrader._compute_rsi(closes, period=14)
+        self.assertAlmostEqual(rsi, 100.0, places=4)
+
+    def test_rsi_all_losses_is_zero(self):
+        # Strictly falling prices → no gains → RSI = 0
+        closes = [float(i) for i in range(20, 0, -1)]
+        rsi = CryptoTrader._compute_rsi(closes, period=14)
+        self.assertAlmostEqual(rsi, 0.0, places=4)
+
+    def test_rsi_is_between_0_and_100(self):
+        import random
+        random.seed(42)
+        closes = [100.0 + random.uniform(-5, 5) for _ in range(30)]
+        rsi = CryptoTrader._compute_rsi(closes, period=14)
+        self.assertGreaterEqual(rsi, 0.0)
+        self.assertLessEqual(rsi, 100.0)
+
+    def test_rsi_raises_when_too_few_closes(self):
+        with self.assertRaises(ValueError):
+            CryptoTrader._compute_rsi([100.0] * 5, period=14)
+
+    def test_rsi_midpoint_for_equal_moves(self):
+        # Alternating +1 / -1 → equal avg_gain and avg_loss → RSI ≈ 50
+        closes = []
+        price = 100.0
+        for i in range(30):
+            price += 1.0 if i % 2 == 0 else -1.0
+            closes.append(price)
+        rsi = CryptoTrader._compute_rsi(closes, period=14)
+        self.assertAlmostEqual(rsi, 50.0, delta=5.0)
+
+
+# ---------------------------------------------------------------------------
+# get_indicators tests
+# ---------------------------------------------------------------------------
+
+class TestGetIndicators(unittest.TestCase):
+    SYMBOL = "BTC/USDT"
+
+    def setUp(self):
+        self.trader = _make_trader()
+        # Build enough synthetic closes (rising then flat)
+        n = config.EMA_PERIOD + config.RSI_PERIOD + 20
+        closes = [float(i) for i in range(1, n + 1)]
+        self.trader.exchange.fetch_ohlcv.return_value = _make_ohlcv(closes)
+
+    def test_returns_price_ema200_rsi_keys(self):
+        result = self.trader.get_indicators(self.SYMBOL)
+        self.assertIn("price", result)
+        self.assertIn("ema200", result)
+        self.assertIn("rsi", result)
+
+    def test_price_equals_last_close(self):
+        n = config.EMA_PERIOD + config.RSI_PERIOD + 20
+        closes = [float(i) for i in range(1, n + 1)]
+        self.trader.exchange.fetch_ohlcv.return_value = _make_ohlcv(closes)
+        result = self.trader.get_indicators(self.SYMBOL)
+        self.assertAlmostEqual(result["price"], closes[-1])
+
+    def test_fetch_ohlcv_called_with_correct_limit(self):
+        self.trader.get_indicators(self.SYMBOL, timeframe="4h")
+        expected_limit = config.EMA_PERIOD + config.RSI_PERIOD + 10
+        self.trader.exchange.fetch_ohlcv.assert_called_once_with(
+            self.SYMBOL, "4h", limit=expected_limit
+        )
+
+
+# ---------------------------------------------------------------------------
+# should_buy tests
+# ---------------------------------------------------------------------------
+
+class TestShouldBuy(unittest.TestCase):
+    SYMBOL = "BTC/USDT"
+
+    def _set_indicators(self, trader, price, ema200, rsi):
+        """Patch get_indicators to return controlled values."""
+        trader.get_indicators = MagicMock(
+            return_value={"price": price, "ema200": ema200, "rsi": rsi}
+        )
+
+    def test_buy_signal_when_price_above_ema_and_rsi_oversold(self):
+        trader = _make_trader()
+        self._set_indicators(trader, price=110.0, ema200=100.0, rsi=25.0)
+        self.assertTrue(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_price_below_ema(self):
+        trader = _make_trader()
+        self._set_indicators(trader, price=90.0, ema200=100.0, rsi=25.0)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_rsi_not_oversold(self):
+        trader = _make_trader()
+        self._set_indicators(trader, price=110.0, ema200=100.0, rsi=50.0)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_rsi_at_exact_oversold_threshold(self):
+        # RSI must be *below* the threshold, not equal
+        trader = _make_trader()
+        self._set_indicators(
+            trader, price=110.0, ema200=100.0, rsi=config.RSI_OVERSOLD
+        )
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_both_conditions_fail(self):
+        trader = _make_trader()
+        self._set_indicators(trader, price=90.0, ema200=100.0, rsi=60.0)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+
+# ---------------------------------------------------------------------------
+# check_exit tests
+# ---------------------------------------------------------------------------
+
+class TestCheckExit(unittest.TestCase):
+    SYMBOL = "BTC/USDT"
+    ENTRY = 10_000.0
+
+    def setUp(self):
+        self.trader = _make_trader()
+
+    def _set_current_price(self, price: float):
+        _set_price(self.trader, self.SYMBOL, price)
+
+    def test_take_profit_triggered(self):
+        tp_price = self.ENTRY * (1 + config.TAKE_PROFIT_PCT)
+        self._set_current_price(tp_price)
+        self.assertEqual(self.trader.check_exit(self.SYMBOL, self.ENTRY), "take_profit")
+
+    def test_take_profit_triggered_above_threshold(self):
+        self._set_current_price(self.ENTRY * 1.10)  # 10 % up
+        self.assertEqual(self.trader.check_exit(self.SYMBOL, self.ENTRY), "take_profit")
+
+    def test_stop_loss_triggered(self):
+        sl_price = self.ENTRY * (1 - config.STOP_LOSS_PCT)
+        self._set_current_price(sl_price)
+        self.assertEqual(self.trader.check_exit(self.SYMBOL, self.ENTRY), "stop_loss")
+
+    def test_stop_loss_triggered_below_threshold(self):
+        self._set_current_price(self.ENTRY * 0.95)  # 5 % down
+        self.assertEqual(self.trader.check_exit(self.SYMBOL, self.ENTRY), "stop_loss")
+
+    def test_hold_when_within_range(self):
+        self._set_current_price(self.ENTRY * 1.03)  # 3 % up — inside TP/SL band
+        self.assertEqual(self.trader.check_exit(self.SYMBOL, self.ENTRY), "hold")
+
+    def test_hold_at_entry_price(self):
+        self._set_current_price(self.ENTRY)
+        self.assertEqual(self.trader.check_exit(self.SYMBOL, self.ENTRY), "hold")
+
+    def test_hold_slightly_below_entry(self):
+        self._set_current_price(self.ENTRY * 0.99)  # 1 % down — above SL
+        self.assertEqual(self.trader.check_exit(self.SYMBOL, self.ENTRY), "hold")
+
+    def test_raises_on_zero_entry_price(self):
+        self._set_current_price(10_000.0)
+        with self.assertRaises(ValueError):
+            self.trader.check_exit(self.SYMBOL, 0.0)
+
+    def test_raises_on_negative_entry_price(self):
+        self._set_current_price(10_000.0)
+        with self.assertRaises(ValueError):
+            self.trader.check_exit(self.SYMBOL, -100.0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
