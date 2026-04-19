@@ -27,11 +27,11 @@ from trader import CryptoTrader
 bot = CryptoTrader(exchange_id="kraken")
 
 # Buy $40 worth of BTC — simulated, no real order placed
-order = bot.buy("BTC/USDT", 40.0)
+order = bot.buy("BTC/USD", 40.0)
 print(order)
 
 # Sell 0.001 BTC — simulated
-order = bot.sell("BTC/USDT", 0.001)
+order = bot.sell("BTC/USD", 0.001)
 print(order)
 ```
 
@@ -48,7 +48,7 @@ bot = CryptoTrader(
 )
 
 # Will raise OrderSizeError if amount < $30 or > $50
-order = bot.buy("BTC/USDT", 45.00)
+order = bot.buy("BTC/USD", 45.00)
 ```
 
 ## Configuration (`config.py`)
@@ -58,7 +58,7 @@ order = bot.buy("BTC/USDT", 45.00)
 | `MIN_BUY_ORDER` | `30.0` | Minimum buy order size in USD |
 | `MAX_BUY_ORDER` | `50.0` | Maximum buy order size in USD |
 | `DEFAULT_EXCHANGE` | `"kraken"` | ccxt exchange identifier |
-| `DEFAULT_SYMBOLS` | `["BTC/USDT", "ETH/USDT"]` | Trading pairs to monitor |
+| `DEFAULT_SYMBOLS` | `["BTC/USD", "ETH/USD"]` | Trading pairs to monitor |
 | `PAPER_TRADING` | `True` | Simulate orders without spending real money |
 
 ## Running the tests
