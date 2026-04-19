@@ -826,6 +826,155 @@ class TestBuyMaxOrders(unittest.TestCase):
             self.assertTrue(order.get("paper"))
 
 
+# ---------------------------------------------------------------------------
+# buy_bundle tests
+# ---------------------------------------------------------------------------
+
+def _set_ticker_for_bundle(trader: CryptoTrader, price: float) -> None:
+    """Configure the mocked exchange to return *price* and sufficient volume for any symbol."""
+    trader.exchange.fetch_ticker.return_value = {
+        "ask": price,
+        "last": price,
+        "quoteVolume": config.MIN_VOLUME_USD * 10,
+    }
+
+
+class TestBuyBundle(unittest.TestCase):
+    """Tests for CryptoTrader.buy_bundle()."""
+
+    PRICE = 1_000.0
+    AMOUNT = 40.0  # within MIN_BUY_ORDER .. MAX_BUY_ORDER
+
+    def setUp(self):
+        self.trader = _make_trader(paper_trading=True)
+        _set_ticker_for_bundle(self.trader, self.PRICE)
+
+    # --- happy path (paper trading) ---
+
+    def test_returns_order_for_every_symbol_in_bundle(self):
+        orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
+        for sym in config.BUNDLES["large_caps"]:
+            self.assertIn(sym, orders)
+
+    def test_each_order_is_a_buy(self):
+        orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
+        for order in orders.values():
+            self.assertEqual(order["side"], "buy")
+
+    def test_each_order_has_correct_cost(self):
+        orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
+        for order in orders.values():
+            self.assertAlmostEqual(order["cost"], self.AMOUNT)
+
+    def test_paper_orders_flagged(self):
+        orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
+        for order in orders.values():
+            self.assertTrue(order.get("paper"))
+
+    def test_returns_dict_not_list(self):
+        result = self.trader.buy_bundle("large_caps", self.AMOUNT)
+        self.assertIsInstance(result, dict)
+
+    # --- live trading ---
+
+    def test_live_trading_calls_exchange_per_symbol(self):
+        """In live mode, create_market_buy_order must be called once per symbol."""
+        live_trader = _make_trader(paper_trading=False)
+        _set_ticker_for_bundle(live_trader, self.PRICE)
+        live_trader.exchange.create_market_buy_order.return_value = {
+            "symbol": "X/USD",
+            "side": "buy",
+            "type": "market",
+            "amount": self.AMOUNT / self.PRICE,
+            "price": self.PRICE,
+            "cost": self.AMOUNT,
+            "status": "closed",
+        }
+        live_trader.buy_bundle("large_caps", self.AMOUNT)
+        expected_calls = len(config.BUNDLES["large_caps"])
+        self.assertEqual(
+            live_trader.exchange.create_market_buy_order.call_count,
+            expected_calls,
+        )
+
+    def test_live_order_returned_per_symbol(self):
+        """buy_bundle returns the exchange response for each symbol in live mode."""
+        live_trader = _make_trader(paper_trading=False)
+        _set_ticker_for_bundle(live_trader, self.PRICE)
+
+        def _fake_order(symbol, qty):
+            return {
+                "symbol": symbol,
+                "side": "buy",
+                "type": "market",
+                "amount": qty,
+                "price": self.PRICE,
+                "cost": qty * self.PRICE,
+                "status": "closed",
+            }
+
+        live_trader.exchange.create_market_buy_order.side_effect = _fake_order
+        orders = live_trader.buy_bundle("large_caps", self.AMOUNT)
+        self.assertEqual(set(orders.keys()), set(config.BUNDLES["large_caps"]))
+        for sym, order in orders.items():
+            self.assertEqual(order["symbol"], sym)
+
+    # --- unknown bundle ---
+
+    def test_unknown_bundle_raises_key_error(self):
+        with self.assertRaises(KeyError):
+            self.trader.buy_bundle("nonexistent_bundle", self.AMOUNT)
+
+    def test_key_error_message_contains_bundle_name(self):
+        with self.assertRaises(KeyError) as ctx:
+            self.trader.buy_bundle("nonexistent_bundle", self.AMOUNT)
+        self.assertIn("nonexistent_bundle", str(ctx.exception))
+
+    # --- partial failures are skipped ---
+
+    def test_insufficient_volume_symbol_is_skipped(self):
+        """A symbol with low volume is skipped; the rest of the bundle executes."""
+        symbols = config.BUNDLES["large_caps"]
+        low_vol_sym = symbols[0]
+        good_vol_sym = symbols[1]
+
+        def _ticker(symbol):
+            vol = 0.0 if symbol == low_vol_sym else config.MIN_VOLUME_USD * 10
+            return {"ask": self.PRICE, "last": self.PRICE, "quoteVolume": vol}
+
+        self.trader.exchange.fetch_ticker.side_effect = _ticker
+
+        orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
+        self.assertNotIn(low_vol_sym, orders)
+        self.assertIn(good_vol_sym, orders)
+
+    def test_order_size_error_symbol_is_skipped(self):
+        """An amount outside the allowed range skips all symbols in the bundle but raises nothing."""
+        trader = _make_trader(paper_trading=True)
+        _set_ticker_for_bundle(trader, self.PRICE)
+        # Use an amount that is below MIN_BUY_ORDER to trigger OrderSizeError
+        orders = trader.buy_bundle("large_caps", config.MIN_BUY_ORDER - 1.0)
+        self.assertEqual(orders, {})
+
+    def test_all_symbols_skipped_returns_empty_dict(self):
+        """If every symbol in the bundle is skipped, an empty dict is returned."""
+        self.trader.exchange.fetch_ticker.return_value = {
+            "ask": self.PRICE,
+            "last": self.PRICE,
+            "quoteVolume": 0.0,  # below minimum for every symbol
+        }
+        orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
+        self.assertEqual(orders, {})
+
+    def test_defi_bundle_all_symbols_bought(self):
+        orders = self.trader.buy_bundle("defi", self.AMOUNT)
+        self.assertEqual(set(orders.keys()), set(config.BUNDLES["defi"]))
+
+    def test_layer1_bundle_all_symbols_bought(self):
+        orders = self.trader.buy_bundle("layer1", self.AMOUNT)
+        self.assertEqual(set(orders.keys()), set(config.BUNDLES["layer1"]))
+
+
 if __name__ == "__main__":
     unittest.main()
 

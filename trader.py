@@ -415,6 +415,85 @@ class CryptoTrader:
         )
         return orders
 
+    def buy_bundle(self, bundle_name: str, amount_usd_per_symbol: float) -> dict:
+        """
+        Place a market buy order for every symbol in a named bundle.
+
+        Bundles are defined in ``config.BUNDLES`` as a mapping of
+        ``bundle_name → [symbol, ...]``.  Each symbol receives its own
+        independent order for *amount_usd_per_symbol* USD.
+
+        Symbols whose orders fail due to insufficient volume or an invalid
+        order size are **skipped** with a warning rather than aborting the
+        entire bundle, so a single illiquid asset cannot block the rest.
+        All other exceptions are re-raised immediately.
+
+        Works in both **paper-trading** and **live-trading** modes — the
+        underlying :meth:`buy` method handles the distinction transparently.
+
+        Parameters
+        ----------
+        bundle_name :
+            Key in ``config.BUNDLES``, e.g. ``"large_caps"``.
+        amount_usd_per_symbol :
+            USD value to spend on each symbol in the bundle.  Must satisfy
+            the configured ``min_buy_order`` / ``max_buy_order`` limits.
+
+        Returns
+        -------
+        dict[str, dict]
+            Mapping of ``symbol → order`` for every symbol that was
+            successfully bought.  Symbols that were skipped are absent.
+
+        Raises
+        ------
+        KeyError
+            If *bundle_name* is not found in ``config.BUNDLES``.
+        """
+        if bundle_name not in config.BUNDLES:
+            raise KeyError(
+                f"Bundle '{bundle_name}' is not defined in config.BUNDLES. "
+                f"Available bundles: {list(config.BUNDLES.keys())}"
+            )
+
+        symbols = config.BUNDLES[bundle_name]
+        orders: dict = {}
+
+        logger.info(
+            "buy_bundle '%s' — %d symbol(s), $%.2f each (paper=%s)",
+            bundle_name,
+            len(symbols),
+            amount_usd_per_symbol,
+            self.paper_trading,
+        )
+
+        for symbol in symbols:
+            try:
+                order = self.buy(symbol, amount_usd_per_symbol)
+                orders[symbol] = order
+                logger.info(
+                    "buy_bundle '%s' — bought %s: qty=%.8f @ %.6f",
+                    bundle_name,
+                    symbol,
+                    order["amount"],
+                    order["price"],
+                )
+            except (InsufficientVolumeError, OrderSizeError) as exc:
+                logger.warning(
+                    "buy_bundle '%s' — skipping %s: %s",
+                    bundle_name,
+                    symbol,
+                    exc,
+                )
+
+        logger.info(
+            "buy_bundle '%s' — placed %d / %d orders",
+            bundle_name,
+            len(orders),
+            len(symbols),
+        )
+        return orders
+
     # ------------------------------------------------------------------
     # Technical indicators
     # ------------------------------------------------------------------
