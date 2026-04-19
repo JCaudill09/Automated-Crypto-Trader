@@ -10,7 +10,7 @@ MAX_BUY_ORDER = 50.0   # Maximum buy order amount in USD
 DEFAULT_EXCHANGE = "kraken"
 
 # Default trading pairs to monitor
-DEFAULT_SYMBOLS = ["BTC/USDT", "ETH/USDT"]
+DEFAULT_SYMBOLS = ["BTC/USD", "ETH/USD"]
 
 # Paper trading mode — when True, no real orders are placed
 PAPER_TRADING = False
@@ -28,7 +28,7 @@ RSI_OVERBOUGHT = 70    # RSI above this level → overbought (potential sell)
 # How often (in seconds) to refresh the list of tradeable pairs from the exchange
 SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
 
-# Minimum 24-hour trading volume in quote currency (USD / USDT) required
+# Minimum 24-hour trading volume in quote currency (USD) required
 # before a buy order is placed or a buy signal is issued.  Markets below
 # this threshold are considered too illiquid to reliably fill or exit orders.
 MIN_VOLUME_USD = 70_000.0
