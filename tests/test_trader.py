@@ -1241,6 +1241,196 @@ class TestGetHoldings(unittest.TestCase):
         self.assertIn("BTC/USD", holdings)
 
 
+# ---------------------------------------------------------------------------
+# place_exit_orders tests
+# ---------------------------------------------------------------------------
+
+class TestPlaceExitOrders(unittest.TestCase):
+    """Tests for CryptoTrader.place_exit_orders."""
+
+    def setUp(self):
+        self.trader = _make_trader(paper_trading=True)
+
+    # -- Paper-trading mode --------------------------------------------------
+
+    def test_paper_returns_none_order_ids(self):
+        result = self.trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
+        self.assertIsNone(result["take_profit_order_id"])
+        self.assertIsNone(result["stop_loss_order_id"])
+
+    def test_paper_tp_price_correct(self):
+        entry = 50_000.0
+        result = self.trader.place_exit_orders("BTC/USD", 0.001, entry)
+        expected = entry * (1.0 + config.TAKE_PROFIT_PCT)
+        self.assertAlmostEqual(result["take_profit_price"], expected)
+
+    def test_paper_sl_price_correct(self):
+        entry = 50_000.0
+        result = self.trader.place_exit_orders("BTC/USD", 0.001, entry)
+        expected = entry * (1.0 - config.STOP_LOSS_PCT)
+        self.assertAlmostEqual(result["stop_loss_price"], expected)
+
+    def test_paper_no_exchange_calls(self):
+        self.trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
+        self.trader.exchange.create_order.assert_not_called()
+
+    # -- Validation ----------------------------------------------------------
+
+    def test_raises_on_non_usd_pair(self):
+        with self.assertRaises(ValueError):
+            self.trader.place_exit_orders("BTC/EUR", 0.001, 50_000.0)
+
+    def test_raises_on_zero_entry_price(self):
+        with self.assertRaises(ValueError):
+            self.trader.place_exit_orders("BTC/USD", 0.001, 0.0)
+
+    def test_raises_on_negative_entry_price(self):
+        with self.assertRaises(ValueError):
+            self.trader.place_exit_orders("BTC/USD", 0.001, -1.0)
+
+    def test_raises_on_zero_quantity(self):
+        with self.assertRaises(ValueError):
+            self.trader.place_exit_orders("BTC/USD", 0.0, 50_000.0)
+
+    def test_raises_on_negative_quantity(self):
+        with self.assertRaises(ValueError):
+            self.trader.place_exit_orders("BTC/USD", -0.001, 50_000.0)
+
+    # -- Live-trading mode ---------------------------------------------------
+
+    def test_live_places_two_orders(self):
+        trader = _make_trader(paper_trading=False)
+        tp_mock = {"id": "tp-123"}
+        sl_mock = {"id": "sl-456"}
+        trader.exchange.create_order.side_effect = [tp_mock, sl_mock]
+        result = trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
+        self.assertEqual(result["take_profit_order_id"], "tp-123")
+        self.assertEqual(result["stop_loss_order_id"], "sl-456")
+        self.assertEqual(trader.exchange.create_order.call_count, 2)
+
+    def test_live_tp_order_is_limit_sell(self):
+        trader = _make_trader(paper_trading=False)
+        trader.exchange.create_order.return_value = {"id": "x"}
+        trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
+        tp_call = trader.exchange.create_order.call_args_list[0]
+        # args: symbol, order_type, side, quantity, price
+        self.assertEqual(tp_call.args[1], "limit")
+        self.assertEqual(tp_call.args[2], "sell")
+
+    def test_live_sl_order_uses_stop_price(self):
+        trader = _make_trader(paper_trading=False)
+        trader.exchange.create_order.return_value = {"id": "x"}
+        entry = 50_000.0
+        trader.place_exit_orders("BTC/USD", 0.001, entry)
+        sl_call = trader.exchange.create_order.call_args_list[1]
+        expected_sl_price = entry * (1.0 - config.STOP_LOSS_PCT)
+        # price arg (index 4) should equal the stop-loss price
+        self.assertAlmostEqual(sl_call.args[4], expected_sl_price)
+
+    def test_live_fallback_to_stopmarket_on_exception(self):
+        """If 'stop' order type fails the method falls back to 'stopMarket'."""
+        trader = _make_trader(paper_trading=False)
+        tp_mock = {"id": "tp-1"}
+        sl_mock = {"id": "sl-2"}
+        trader.exchange.create_order.side_effect = [
+            tp_mock,                  # TP limit order succeeds
+            RuntimeError("unsupported order type"),  # first SL attempt fails
+            sl_mock,                  # fallback stopMarket succeeds
+        ]
+        result = trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
+        self.assertEqual(result["stop_loss_order_id"], "sl-2")
+        # 3 calls total: TP, failed stop, successful stopMarket
+        self.assertEqual(trader.exchange.create_order.call_count, 3)
+
+
+# ---------------------------------------------------------------------------
+# check_exit_orders tests
+# ---------------------------------------------------------------------------
+
+class TestCheckExitOrders(unittest.TestCase):
+    """Tests for CryptoTrader.check_exit_orders."""
+
+    def setUp(self):
+        self.trader = _make_trader(paper_trading=True)
+        self.entry = 50_000.0
+
+    def _set_price(self, price: float) -> None:
+        self.trader.exchange.fetch_ticker.return_value = {
+            "ask": price,
+            "last": price,
+            "quoteVolume": config.MIN_VOLUME_USD * 10,
+        }
+
+    # -- Fallback (None order IDs) -------------------------------------------
+
+    def test_fallback_hold_when_both_ids_none(self):
+        self._set_price(self.entry)
+        result = self.trader.check_exit_orders("BTC/USD", None, None, self.entry)
+        self.assertEqual(result, "hold")
+
+    def test_fallback_take_profit_when_both_ids_none(self):
+        tp_price = self.entry * (1.0 + config.TAKE_PROFIT_PCT)
+        self._set_price(tp_price)
+        result = self.trader.check_exit_orders("BTC/USD", None, None, self.entry)
+        self.assertEqual(result, "take_profit")
+
+    def test_fallback_stop_loss_when_both_ids_none(self):
+        sl_price = self.entry * (1.0 - config.STOP_LOSS_PCT)
+        self._set_price(sl_price)
+        result = self.trader.check_exit_orders("BTC/USD", None, None, self.entry)
+        self.assertEqual(result, "stop_loss")
+
+    # -- Exchange-order checks (live mode) -----------------------------------
+
+    def _make_live_trader(self):
+        return _make_trader(paper_trading=False)
+
+    def test_take_profit_order_filled_cancels_sl(self):
+        trader = self._make_live_trader()
+        trader.exchange.fetch_order.side_effect = [
+            {"status": "closed"},   # TP order filled
+            {"status": "open"},     # SL order still open
+        ]
+        result = trader.check_exit_orders("BTC/USD", "tp-1", "sl-2", self.entry)
+        self.assertEqual(result, "take_profit")
+        trader.exchange.cancel_order.assert_called_once_with("sl-2", "BTC/USD")
+
+    def test_stop_loss_order_filled_cancels_tp(self):
+        trader = self._make_live_trader()
+        trader.exchange.fetch_order.side_effect = [
+            {"status": "open"},     # TP order still open
+            {"status": "closed"},   # SL order filled
+        ]
+        result = trader.check_exit_orders("BTC/USD", "tp-1", "sl-2", self.entry)
+        self.assertEqual(result, "stop_loss")
+        trader.exchange.cancel_order.assert_called_once_with("tp-1", "BTC/USD")
+
+    def test_neither_filled_returns_hold(self):
+        trader = self._make_live_trader()
+        trader.exchange.fetch_order.return_value = {"status": "open"}
+        result = trader.check_exit_orders("BTC/USD", "tp-1", "sl-2", self.entry)
+        self.assertEqual(result, "hold")
+        trader.exchange.cancel_order.assert_not_called()
+
+    def test_fetch_order_exception_treated_as_not_filled(self):
+        trader = self._make_live_trader()
+        trader.exchange.fetch_order.side_effect = RuntimeError("network error")
+        result = trader.check_exit_orders("BTC/USD", "tp-1", "sl-2", self.entry)
+        self.assertEqual(result, "hold")
+
+    def test_cancel_order_exception_does_not_raise(self):
+        trader = self._make_live_trader()
+        trader.exchange.fetch_order.side_effect = [
+            {"status": "closed"},
+            {"status": "open"},
+        ]
+        trader.exchange.cancel_order.side_effect = RuntimeError("cancel failed")
+        # Should log a warning but not propagate the exception
+        result = trader.check_exit_orders("BTC/USD", "tp-1", "sl-2", self.entry)
+        self.assertEqual(result, "take_profit")
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

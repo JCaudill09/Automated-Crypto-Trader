@@ -906,3 +906,224 @@ class CryptoTrader:
         if current_price <= stop_loss_price:
             return "stop_loss"
         return "hold"
+
+    def place_exit_orders(
+        self, symbol: str, quantity: float, entry_price: float
+    ) -> dict:
+        """
+        Place take-profit and stop-loss sell orders immediately after a buy.
+
+        A **limit sell** is placed at the take-profit price
+        (``entry_price × (1 + config.TAKE_PROFIT_PCT)``) and a
+        **stop-market sell** is placed at the stop-loss price
+        (``entry_price × (1 − config.STOP_LOSS_PCT)``).
+
+        When the exchange fills one of the two orders the caller should
+        cancel the other via :meth:`check_exit_orders`, which handles that
+        housekeeping automatically.
+
+        In **paper-trading** mode no real orders are submitted; the method
+        returns simulated order dicts with ``"paper": True`` and
+        ``"id": None`` so that :meth:`check_exit_orders` falls back to
+        price-based polling for those positions.
+
+        Parameters
+        ----------
+        symbol :
+            Trading pair, e.g. ``"BTC/USD"``.
+        quantity :
+            Number of units to sell when the TP or SL is triggered.
+        entry_price :
+            Fill price of the preceding buy order.
+
+        Returns
+        -------
+        dict
+            ``{
+              "take_profit_order_id": str | None,
+              "stop_loss_order_id":   str | None,
+              "take_profit_price":    float,
+              "stop_loss_price":      float,
+            }``
+
+        Raises
+        ------
+        ValueError
+            If *entry_price* or *quantity* is not positive, or *symbol*
+            is not a USD-quoted pair.
+        """
+        self._validate_usd_pair(symbol)
+        if entry_price <= 0:
+            raise ValueError(
+                f"entry_price must be positive, got {entry_price}."
+            )
+        if quantity <= 0:
+            raise ValueError(
+                f"quantity must be positive, got {quantity}."
+            )
+
+        take_profit_price = entry_price * (1.0 + config.TAKE_PROFIT_PCT)
+        stop_loss_price = entry_price * (1.0 - config.STOP_LOSS_PCT)
+
+        logger.info(
+            "place_exit_orders %s — qty=%.8f entry=%.6f TP=%.6f SL=%.6f (paper=%s)",
+            symbol,
+            quantity,
+            entry_price,
+            take_profit_price,
+            stop_loss_price,
+            self.paper_trading,
+        )
+
+        if self.paper_trading:
+            return {
+                "take_profit_order_id": None,
+                "stop_loss_order_id": None,
+                "take_profit_price": take_profit_price,
+                "stop_loss_price": stop_loss_price,
+            }
+
+        # Place limit sell for take-profit
+        tp_order = self.exchange.create_order(
+            symbol, "limit", "sell", quantity, take_profit_price
+        )
+        tp_order_id = tp_order.get("id")
+        logger.info(
+            "place_exit_orders %s — TP limit-sell placed id=%s @ %.6f",
+            symbol,
+            tp_order_id,
+            take_profit_price,
+        )
+
+        # Place stop-market sell for stop-loss
+        try:
+            sl_order = self.exchange.create_order(
+                symbol,
+                "stop",
+                "sell",
+                quantity,
+                stop_loss_price,
+                {"stopPrice": stop_loss_price},
+            )
+        except Exception:
+            # Some exchanges use a different order-type name for stop-market.
+            # Fall back to "stopMarket" which is the ccxt unified alias.
+            sl_order = self.exchange.create_order(
+                symbol,
+                "stopMarket",
+                "sell",
+                quantity,
+                stop_loss_price,
+                {"stopPrice": stop_loss_price},
+            )
+        sl_order_id = sl_order.get("id")
+        logger.info(
+            "place_exit_orders %s — SL stop-market placed id=%s @ %.6f",
+            symbol,
+            sl_order_id,
+            stop_loss_price,
+        )
+
+        return {
+            "take_profit_order_id": tp_order_id,
+            "stop_loss_order_id": sl_order_id,
+            "take_profit_price": take_profit_price,
+            "stop_loss_price": stop_loss_price,
+        }
+
+    def check_exit_orders(
+        self,
+        symbol: str,
+        tp_order_id: Optional[str],
+        sl_order_id: Optional[str],
+        entry_price: float,
+    ) -> str:
+        """
+        Check whether the exchange-side take-profit or stop-loss order has
+        filled, cancel the survivor, and report the outcome.
+
+        When both *tp_order_id* and *sl_order_id* are ``None`` (paper-
+        trading or orders that could not be placed) the method falls back to
+        the price-based :meth:`check_exit` logic.
+
+        Parameters
+        ----------
+        symbol :
+            Trading pair, e.g. ``"BTC/USD"``.
+        tp_order_id :
+            Exchange order ID for the take-profit limit-sell order, or
+            ``None`` to skip exchange-order checking.
+        sl_order_id :
+            Exchange order ID for the stop-loss stop-market order, or
+            ``None`` to skip exchange-order checking.
+        entry_price :
+            Entry price used by the price-based fallback.
+
+        Returns
+        -------
+        str
+            * ``"take_profit"`` — TP order filled (SL order cancelled).
+            * ``"stop_loss"``   — SL order filled (TP order cancelled).
+            * ``"hold"``        — neither order has filled yet.
+
+        Raises
+        ------
+        ValueError
+            If *entry_price* is not positive (fallback path only).
+        """
+        # Paper-trading or missing order IDs → use price-based polling
+        if tp_order_id is None and sl_order_id is None:
+            return self.check_exit(symbol, entry_price)
+
+        def _is_filled(order_id: Optional[str]) -> bool:
+            if order_id is None:
+                return False
+            try:
+                order = self.exchange.fetch_order(order_id, symbol)
+                return order.get("status") == "closed"
+            except Exception as exc:
+                logger.warning(
+                    "check_exit_orders %s — could not fetch order %s: %s",
+                    symbol,
+                    order_id,
+                    exc,
+                )
+                return False
+
+        def _cancel_order(order_id: Optional[str]) -> None:
+            if order_id is None:
+                return
+            try:
+                self.exchange.cancel_order(order_id, symbol)
+                logger.info(
+                    "check_exit_orders %s — cancelled order %s",
+                    symbol,
+                    order_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "check_exit_orders %s — could not cancel order %s: %s",
+                    symbol,
+                    order_id,
+                    exc,
+                )
+
+        if _is_filled(tp_order_id):
+            _cancel_order(sl_order_id)
+            logger.info(
+                "check_exit_orders %s — take-profit order %s filled",
+                symbol,
+                tp_order_id,
+            )
+            return "take_profit"
+
+        if _is_filled(sl_order_id):
+            _cancel_order(tp_order_id)
+            logger.info(
+                "check_exit_orders %s — stop-loss order %s filled",
+                symbol,
+                sl_order_id,
+            )
+            return "stop_loss"
+
+        return "hold"

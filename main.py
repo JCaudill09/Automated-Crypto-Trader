@@ -51,6 +51,8 @@ def main():
                 positions[symbol] = {
                     "entry_price": entry_price,
                     "quantity": holding["quantity"],
+                    "tp_order_id": None,
+                    "sl_order_id": None,
                 }
                 logging.info(
                     "Seeded existing holding: %s qty=%.8f entry_price=%.6f",
@@ -120,25 +122,52 @@ def main():
                             bundle_orders = bot.buy_bundle(bundle_name, order_size)
                             for sym, order in bundle_orders.items():
                                 if sym not in positions:
+                                    exit_orders = bot.place_exit_orders(
+                                        sym, order["amount"], order["price"]
+                                    )
                                     positions[sym] = {
                                         "entry_price": order["price"],
                                         "quantity": order["amount"],
+                                        "tp_order_id": exit_orders["take_profit_order_id"],
+                                        "sl_order_id": exit_orders["stop_loss_order_id"],
                                     }
                                     logging.info(
-                                        "Opened bundle position (%s): %s @ %s qty=%s",
-                                        bundle_name, sym, order["price"], order["amount"],
+                                        "Opened bundle position (%s): %s @ %s qty=%s "
+                                        "TP_order=%s SL_order=%s",
+                                        bundle_name,
+                                        sym,
+                                        order["price"],
+                                        order["amount"],
+                                        exit_orders["take_profit_order_id"],
+                                        exit_orders["stop_loss_order_id"],
                                     )
                         else:
                             order_size = min(config.MAX_BUY_ORDER, usd_balance)
                             order = bot.buy(symbol, order_size)
+                            exit_orders = bot.place_exit_orders(
+                                symbol, order["amount"], order["price"]
+                            )
                             positions[symbol] = {
                                 "entry_price": order["price"],
                                 "quantity": order["amount"],
+                                "tp_order_id": exit_orders["take_profit_order_id"],
+                                "sl_order_id": exit_orders["stop_loss_order_id"],
                             }
-                            logging.info("Opened position: %s @ %s qty=%s", symbol, order["price"], order["amount"])
+                            logging.info(
+                                "Opened position: %s @ %s qty=%s TP_order=%s SL_order=%s",
+                                symbol,
+                                order["price"],
+                                order["amount"],
+                                exit_orders["take_profit_order_id"],
+                                exit_orders["stop_loss_order_id"],
+                            )
                 else:
                     entry_price = positions[symbol]["entry_price"]
-                    result = bot.check_exit(symbol, entry_price)
+                    tp_order_id = positions[symbol].get("tp_order_id")
+                    sl_order_id = positions[symbol].get("sl_order_id")
+                    result = bot.check_exit_orders(
+                        symbol, tp_order_id, sl_order_id, entry_price
+                    )
                     if result in ("take_profit", "stop_loss"):
                         quantity = positions[symbol]["quantity"]
                         sell_order = bot.sell(symbol, quantity)
