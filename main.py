@@ -3,6 +3,7 @@ import logging
 import os
 import time
 
+import ccxt
 from dotenv import load_dotenv
 
 from trader import CryptoTrader
@@ -66,12 +67,23 @@ def main():
             try:
                 if symbol not in positions:
                     if bot.should_buy(symbol):
-                        order = bot.buy(symbol, config.MAX_BUY_ORDER)
-                        positions[symbol] = {
-                            "entry_price": order["price"],
-                            "quantity": order["amount"],
-                        }
-                        logging.info("Opened position: %s @ %s qty=%s", symbol, order["price"], order["amount"])
+                        usd_balance = bot.get_usd_balance()
+                        if usd_balance < config.MIN_BUY_ORDER:
+                            logging.warning(
+                                "Skipping buy for %s — insufficient USD balance "
+                                "(%.2f < %.2f min)",
+                                symbol,
+                                usd_balance,
+                                config.MIN_BUY_ORDER,
+                            )
+                        else:
+                            order_size = min(config.MAX_BUY_ORDER, usd_balance)
+                            order = bot.buy(symbol, order_size)
+                            positions[symbol] = {
+                                "entry_price": order["price"],
+                                "quantity": order["amount"],
+                            }
+                            logging.info("Opened position: %s @ %s qty=%s", symbol, order["price"], order["amount"])
                 else:
                     entry_price = positions[symbol]["entry_price"]
                     result = bot.check_exit(symbol, entry_price)
@@ -83,6 +95,8 @@ def main():
                             result, symbol, quantity, sell_order.get("price"),
                         )
                         del positions[symbol]
+            except ccxt.InsufficientFunds as e:
+                logging.warning("Insufficient funds for %s — skipping: %s", symbol, e)
             except Exception as e:
                 logging.error("Error on %s: %s", symbol, e)
 
