@@ -39,6 +39,36 @@ def main():
 
     positions = {}  # symbol -> {"entry_price": float, "quantity": float}
 
+    # Seed positions from existing exchange holdings so the bot can apply
+    # take-profit and stop-loss to assets held before this session started.
+    # The current market price is used as the entry price, meaning thresholds
+    # are measured from the time the bot starts up.
+    try:
+        holdings = bot.get_holdings()
+        for symbol, holding in holdings.items():
+            try:
+                entry_price = bot.get_current_price(symbol)
+                positions[symbol] = {
+                    "entry_price": entry_price,
+                    "quantity": holding["quantity"],
+                }
+                logging.info(
+                    "Seeded existing holding: %s qty=%.8f entry_price=%.6f",
+                    symbol,
+                    holding["quantity"],
+                    entry_price,
+                )
+            except Exception as exc:
+                logging.warning(
+                    "Could not fetch price for existing holding %s: %s", symbol, exc
+                )
+    except Exception as exc:
+        logging.warning(
+            "Could not load holdings from exchange (%s). "
+            "Starting with empty positions.",
+            exc,
+        )
+
     # Build a reverse lookup: symbol -> bundle_name (first match wins).
     # Only used when config.USE_BUNDLES is True.
     symbol_to_bundle: dict = {}
