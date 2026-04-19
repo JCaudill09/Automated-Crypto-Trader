@@ -20,10 +20,17 @@ TAKE_PROFIT_PCT = 0.075   # Close position when price rises 7.5 % above entry
 STOP_LOSS_PCT   = 0.025   # Close position when price falls 2.5 % below entry
 
 # Technical indicator settings
-EMA_PERIOD     = 200   # 200-period Exponential Moving Average
+EMA_PERIOD     = 200   # 200-period Exponential Moving Average (utility; not used by buy signal)
 RSI_PERIOD     = 14    # RSI look-back period (Wilder smoothing)
 RSI_OVERSOLD   = 30    # RSI below this level → oversold (potential buy)
 RSI_OVERBOUGHT = 70    # RSI above this level → overbought (potential sell)
+
+# SimpleAlgo signal — EMA crossover proxy (short over long = bullish momentum)
+SIMPLE_ALGO_SHORT_PERIOD = 9    # Short-term EMA period
+SIMPLE_ALGO_LONG_PERIOD  = 21   # Long-term EMA period
+
+# Volume Profile HD settings
+VOLUME_PROFILE_BINS = 50  # Number of equal-width price bins for the volume profile
 
 # How often (in seconds) to refresh the list of tradeable pairs from the exchange
 SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour

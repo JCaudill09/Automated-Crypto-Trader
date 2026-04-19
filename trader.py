@@ -10,8 +10,15 @@ Order constraints
 
 Trade signals
 -------------
-- Buy  : price is above the 200-EMA **and** RSI is below the oversold
-         threshold (config.RSI_OVERSOLD, default 30).
+- Buy  : all four conditions must be satisfied simultaneously:
+         (1) price is above VWAP → confirmed intraday uptrend;
+         (2) price is at or above the Volume Profile Point of Control →
+             price is sitting above the highest-volume support level;
+         (3) SimpleAlgo EMA-crossover signal is bullish (short-term EMA
+             above long-term EMA) → positive momentum;
+         (4) RSI is below the oversold threshold
+             (config.RSI_OVERSOLD, default 30) → oversold entry.
+         The 24-hour quote-volume minimum check must also pass.
 - Exit : take profit when price rises 7.5 % above entry
          (config.TAKE_PROFIT_PCT); stop loss when price falls 2.5 % below
          entry (config.STOP_LOSS_PCT).
@@ -578,6 +585,128 @@ class CryptoTrader:
         rs = avg_gain / avg_loss
         return 100.0 - (100.0 / (1.0 + rs))
 
+    @staticmethod
+    def _compute_vwap(ohlcv: list) -> float:
+        """
+        Compute the Volume Weighted Average Price (VWAP).
+
+        VWAP = Σ(typical_price × volume) / Σ(volume)
+        where typical_price = (high + low + close) / 3.
+
+        When the current price is above the VWAP the intraday trend is up;
+        when it is below, the trend is down.
+
+        Parameters
+        ----------
+        ohlcv :
+            List of OHLCV candles
+            ``[timestamp, open, high, low, close, volume]``.
+
+        Returns
+        -------
+        float
+            VWAP value.
+
+        Raises
+        ------
+        ValueError
+            If the total volume across all candles is zero.
+        """
+        total_pv = 0.0
+        total_volume = 0.0
+        for candle in ohlcv:
+            high, low, close, volume = candle[2], candle[3], candle[4], candle[5]
+            typical_price = (high + low + close) / 3.0
+            total_pv += typical_price * volume
+            total_volume += volume
+        if total_volume == 0.0:
+            raise ValueError(
+                "Cannot compute VWAP: total volume across all candles is zero."
+            )
+        return total_pv / total_volume
+
+    @staticmethod
+    def _compute_volume_profile(ohlcv: list, num_bins: int = 50) -> dict:
+        """
+        Compute a basic Volume Profile and return the Point of Control (POC).
+
+        The price range spanned by all candles is divided into *num_bins*
+        equal-width bins.  Each candle's volume is assigned to the bin that
+        contains its typical price ``(high + low + close) / 3``.  The POC is
+        the mid-price of the bin that accumulated the most volume — i.e. the
+        strongest support/resistance level in the period.
+
+        Parameters
+        ----------
+        ohlcv :
+            List of OHLCV candles
+            ``[timestamp, open, high, low, close, volume]``.
+        num_bins :
+            Number of equal-width price bins
+            (default ``config.VOLUME_PROFILE_BINS``, 50).
+
+        Returns
+        -------
+        dict
+            ``{"poc": float}`` — the Point of Control price level.
+        """
+        min_price = float("inf")
+        max_price = float("-inf")
+        for candle in ohlcv:
+            if candle[3] < min_price:
+                min_price = candle[3]
+            if candle[2] > max_price:
+                max_price = candle[2]
+
+        if max_price <= min_price:
+            return {"poc": float(ohlcv[-1][4])}  # fallback: last close
+
+        bin_size = (max_price - min_price) / num_bins
+        volume_bins = [0.0] * num_bins
+
+        for candle in ohlcv:
+            typical_price = (candle[2] + candle[3] + candle[4]) / 3.0
+            bin_idx = min(
+                int((typical_price - min_price) / bin_size), num_bins - 1
+            )
+            volume_bins[bin_idx] += candle[5]
+
+        poc_bin = 0
+        poc_volume = volume_bins[0]
+        for i in range(1, num_bins):
+            if volume_bins[i] > poc_volume:
+                poc_volume = volume_bins[i]
+                poc_bin = i
+        poc_price = min_price + (poc_bin + 0.5) * bin_size
+        return {"poc": poc_price}
+
+    @staticmethod
+    def _compute_simple_algo_signal(closes: list) -> bool:
+        """
+        Return a bullish momentum signal using a short/long EMA crossover.
+
+        This acts as an approximation of algorithmic entry signals: the signal
+        is ``True`` (bullish) when the short-term EMA
+        (``config.SIMPLE_ALGO_SHORT_PERIOD``, default 9) is above the
+        long-term EMA (``config.SIMPLE_ALGO_LONG_PERIOD``, default 21),
+        indicating positive price momentum.
+
+        Parameters
+        ----------
+        closes :
+            Ordered list of closing prices (oldest first).
+
+        Returns
+        -------
+        bool
+            ``True`` when the short-term EMA is above the long-term EMA.
+        """
+        if len(closes) < config.SIMPLE_ALGO_LONG_PERIOD:
+            return False
+        ema_short = CryptoTrader._compute_ema(closes, config.SIMPLE_ALGO_SHORT_PERIOD)
+        ema_long = CryptoTrader._compute_ema(closes, config.SIMPLE_ALGO_LONG_PERIOD)
+        return ema_short > ema_long
+
     def get_indicators(self, symbol: str, timeframe: str = "1h") -> dict:
         """
         Fetch OHLCV candles and return the latest indicator values.
@@ -592,34 +721,53 @@ class CryptoTrader:
         Returns
         -------
         dict
-            ``{"price": float, "ema200": float, "rsi": float}``
+            ``{"price": float, "vwap": float, "rsi": float,
+            "volume_profile_poc": float, "simple_algo_signal": bool}``
         """
-        limit = config.EMA_PERIOD + config.RSI_PERIOD + 10
+        limit = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10
         ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         closes = [candle[4] for candle in ohlcv]  # index 4 = close price
 
-        ema200 = self._compute_ema(closes, config.EMA_PERIOD)
+        vwap = self._compute_vwap(ohlcv)
         rsi = self._compute_rsi(closes, config.RSI_PERIOD)
+        volume_profile = self._compute_volume_profile(ohlcv, config.VOLUME_PROFILE_BINS)
+        simple_algo_signal = self._compute_simple_algo_signal(closes)
         current_price = closes[-1]
 
         logger.debug(
-            "Indicators %s — price=%.4f EMA200=%.4f RSI=%.2f",
+            "Indicators %s — price=%.4f VWAP=%.4f RSI=%.2f VP_POC=%.4f algo_signal=%s",
             symbol,
             current_price,
-            ema200,
+            vwap,
             rsi,
+            volume_profile["poc"],
+            simple_algo_signal,
         )
-        return {"price": current_price, "ema200": ema200, "rsi": rsi}
+        return {
+            "price": current_price,
+            "vwap": vwap,
+            "rsi": rsi,
+            "volume_profile_poc": volume_profile["poc"],
+            "simple_algo_signal": simple_algo_signal,
+        }
 
     def should_buy(self, symbol: str, timeframe: str = "1h") -> bool:
         """
         Return ``True`` when the buy signal fires.
 
-        Buy conditions (both must be met):
+        Buy conditions (all four must be met):
 
-        1. Current price is **above** the 200-EMA → confirmed uptrend.
-        2. RSI is **below** ``config.RSI_OVERSOLD`` (default 30) →
+        1. Current price is **above** the VWAP → confirmed intraday uptrend
+           (Volume Weighted Average Price).
+        2. Current price is **at or above** the Volume Profile Point of
+           Control → price is above the highest-volume support level
+           (Volume Profile HD).
+        3. SimpleAlgo signal is bullish → short-term EMA is above the
+           long-term EMA, indicating positive momentum.
+        4. RSI is **below** ``config.RSI_OVERSOLD`` (default 30) →
            the asset is oversold, offering a potential entry.
+
+        The minimum 24-hour volume check must also pass.
 
         Parameters
         ----------
@@ -629,7 +777,9 @@ class CryptoTrader:
             Candle interval accepted by the exchange (default ``"1h"``).
         """
         indicators = self.get_indicators(symbol, timeframe)
-        price_above_ema = indicators["price"] > indicators["ema200"]
+        price_above_vwap = indicators["price"] > indicators["vwap"]
+        price_above_poc = indicators["price"] >= indicators["volume_profile_poc"]
+        algo_signal = indicators["simple_algo_signal"]
         rsi_oversold = indicators["rsi"] < config.RSI_OVERSOLD
 
         try:
@@ -639,12 +789,15 @@ class CryptoTrader:
             logger.warning("should_buy %s — volume check failed: %s", symbol, exc)
             volume_ok = False
 
-        signal = price_above_ema and rsi_oversold and volume_ok
+        signal = price_above_vwap and price_above_poc and algo_signal and rsi_oversold and volume_ok
 
         logger.info(
-            "should_buy %s — price_above_ema=%s rsi_oversold=%s volume_ok=%s → signal=%s",
+            "should_buy %s — price_above_vwap=%s price_above_poc=%s "
+            "algo_signal=%s rsi_oversold=%s volume_ok=%s → signal=%s",
             symbol,
-            price_above_ema,
+            price_above_vwap,
+            price_above_poc,
+            algo_signal,
             rsi_oversold,
             volume_ok,
             signal,
