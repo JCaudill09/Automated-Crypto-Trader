@@ -39,6 +39,14 @@ def main():
 
     positions = {}  # symbol -> {"entry_price": float, "quantity": float}
 
+    # Build a reverse lookup: symbol -> bundle_name (first match wins).
+    # Only used when config.USE_BUNDLES is True.
+    symbol_to_bundle: dict = {}
+    if config.USE_BUNDLES:
+        for bundle_name, bundle_symbols in config.BUNDLES.items():
+            for sym in bundle_symbols:
+                symbol_to_bundle.setdefault(sym, bundle_name)
+
     # Discover all active USD pairs from the exchange.  Fall back to the
     # static list in config if the market-discovery call fails.
     try:
@@ -76,6 +84,20 @@ def main():
                                 usd_balance,
                                 config.MIN_BUY_ORDER,
                             )
+                        elif config.USE_BUNDLES and symbol in symbol_to_bundle:
+                            bundle_name = symbol_to_bundle[symbol]
+                            order_size = min(config.MAX_BUY_ORDER, usd_balance)
+                            bundle_orders = bot.buy_bundle(bundle_name, order_size)
+                            for sym, order in bundle_orders.items():
+                                if sym not in positions:
+                                    positions[sym] = {
+                                        "entry_price": order["price"],
+                                        "quantity": order["amount"],
+                                    }
+                                    logging.info(
+                                        "Opened bundle position (%s): %s @ %s qty=%s",
+                                        bundle_name, sym, order["price"], order["amount"],
+                                    )
                         else:
                             order_size = min(config.MAX_BUY_ORDER, usd_balance)
                             order = bot.buy(symbol, order_size)

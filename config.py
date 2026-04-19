@@ -32,3 +32,20 @@ SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
 # before a buy order is placed or a buy signal is issued.  Markets below
 # this threshold are considered too illiquid to reliably fill or exit orders.
 MIN_VOLUME_USD = 70_000.0
+
+# ---------------------------------------------------------------------------
+# Order bundles
+# ---------------------------------------------------------------------------
+
+# Named groups of USD-quoted symbols that can be bought together in one call
+# via CryptoTrader.buy_bundle().  Add, remove, or rename bundles freely.
+BUNDLES: dict = {
+    "large_caps": ["BTC/USD", "ETH/USD"],
+    "defi":       ["LINK/USD", "UNI/USD", "AAVE/USD"],
+    "layer1":     ["SOL/USD", "ADA/USD", "DOT/USD"],
+}
+
+# When True the main trading loop uses bundle-based buying: a buy signal for
+# any symbol that belongs to a bundle triggers a buy for the entire bundle.
+# When False (default) the loop behaves exactly as before — single symbols.
+USE_BUNDLES = False
