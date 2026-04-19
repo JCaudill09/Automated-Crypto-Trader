@@ -96,7 +96,7 @@ def main():
                         )
                         del positions[symbol]
             except ccxt.InsufficientFunds as e:
-                logging.warning("Insufficient funds for %s — skipping: %s", symbol, e)
+                logging.warning("Insufficient funds for %s — order skipped: %s", symbol, e)
             except Exception as e:
                 logging.error("Error on %s: %s", symbol, e)
 
