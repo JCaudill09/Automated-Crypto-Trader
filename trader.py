@@ -159,6 +159,28 @@ class CryptoTrader:
             )
         return float(price)
 
+    def get_current_price(self, symbol: str) -> float:
+        """
+        Return the current market price for *symbol*.
+
+        Parameters
+        ----------
+        symbol :
+            Trading pair, e.g. ``"BTC/USD"``.
+
+        Returns
+        -------
+        float
+            Current ask price, falling back to last-traded price when ask
+            is unavailable.
+
+        Raises
+        ------
+        RuntimeError
+            If neither ``ask`` nor ``last`` fields are available or non-zero.
+        """
+        return self._get_price(symbol)
+
     def _check_volume(self, symbol: str) -> None:
         """
         Raise :class:`InsufficientVolumeError` if the 24-hour quote-currency
@@ -803,6 +825,40 @@ class CryptoTrader:
             signal,
         )
         return signal
+
+    def get_holdings(self) -> dict:
+        """
+        Return current non-USD crypto holdings from the exchange.
+
+        Queries the exchange balance and returns every non-USD asset with a
+        positive free quantity, expressed as ``"BASE/USD"`` trading-pair keys.
+
+        Meta-keys returned by ccxt alongside per-currency dicts (``"info"``,
+        ``"free"``, ``"used"``, ``"total"``, ``"datetime"``, ``"timestamp"``)
+        are automatically ignored.
+
+        Returns
+        -------
+        dict[str, dict]
+            Mapping of ``"BASE/USD"`` symbol → ``{"quantity": float}`` for
+            every non-USD asset with a positive free balance.
+        """
+        balance = self.exchange.fetch_balance()
+        _meta_keys = {"info", "free", "used", "total", "datetime", "timestamp"}
+        holdings: dict = {}
+        for currency, amounts in balance.items():
+            if currency in _meta_keys or currency == "USD":
+                continue
+            if not isinstance(amounts, dict):
+                continue
+            free = amounts.get("free")
+            if free is None or float(free) <= 0:
+                continue
+            symbol = f"{currency}/USD"
+            holdings[symbol] = {"quantity": float(free)}
+            logger.debug("get_holdings — %s free=%.8f", symbol, float(free))
+        logger.info("get_holdings — found %d non-USD position(s)", len(holdings))
+        return holdings
 
     def check_exit(self, symbol: str, entry_price: float) -> str:
         """

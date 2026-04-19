@@ -1134,6 +1134,113 @@ class TestBuyBundle(unittest.TestCase):
         self.assertEqual(set(orders.keys()), set(config.BUNDLES["layer1"]))
 
 
+# ---------------------------------------------------------------------------
+# get_holdings tests
+# ---------------------------------------------------------------------------
+
+class TestGetHoldings(unittest.TestCase):
+    def setUp(self):
+        self.trader = _make_trader()
+
+    def _set_balance(self, raw: dict) -> None:
+        self.trader.exchange.fetch_balance.return_value = raw
+
+    def test_returns_non_usd_assets_with_positive_balance(self):
+        self._set_balance({
+            "USD": {"free": 100.0, "used": 0.0, "total": 100.0},
+            "BTC": {"free": 0.5, "used": 0.0, "total": 0.5},
+            "ETH": {"free": 2.0, "used": 0.0, "total": 2.0},
+        })
+        holdings = self.trader.get_holdings()
+        self.assertIn("BTC/USD", holdings)
+        self.assertIn("ETH/USD", holdings)
+
+    def test_excludes_usd(self):
+        self._set_balance({
+            "USD": {"free": 500.0, "used": 0.0, "total": 500.0},
+            "BTC": {"free": 1.0, "used": 0.0, "total": 1.0},
+        })
+        holdings = self.trader.get_holdings()
+        self.assertNotIn("USD/USD", holdings)
+        self.assertIn("BTC/USD", holdings)
+
+    def test_excludes_zero_balance(self):
+        self._set_balance({
+            "BTC": {"free": 0.0, "used": 0.0, "total": 0.0},
+            "ETH": {"free": 1.0, "used": 0.0, "total": 1.0},
+        })
+        holdings = self.trader.get_holdings()
+        self.assertNotIn("BTC/USD", holdings)
+        self.assertIn("ETH/USD", holdings)
+
+    def test_excludes_none_free_balance(self):
+        self._set_balance({
+            "BTC": {"free": None, "used": 0.0, "total": 0.0},
+        })
+        holdings = self.trader.get_holdings()
+        self.assertNotIn("BTC/USD", holdings)
+
+    def test_excludes_meta_keys(self):
+        self._set_balance({
+            "info": {"some": "data"},
+            "free": {"BTC": 0.5},
+            "used": {"BTC": 0.0},
+            "total": {"BTC": 0.5},
+            "datetime": "2024-01-01",
+            "timestamp": 1704067200000,
+            "BTC": {"free": 0.5, "used": 0.0, "total": 0.5},
+        })
+        holdings = self.trader.get_holdings()
+        # Only BTC/USD should appear; meta keys must not generate spurious entries
+        self.assertEqual(set(holdings.keys()), {"BTC/USD"})
+
+    def test_returns_correct_quantity(self):
+        self._set_balance({
+            "BTC": {"free": 0.12345678, "used": 0.0, "total": 0.12345678},
+        })
+        holdings = self.trader.get_holdings()
+        self.assertAlmostEqual(holdings["BTC/USD"]["quantity"], 0.12345678, places=8)
+
+    def test_returns_empty_dict_when_no_crypto(self):
+        self._set_balance({
+            "USD": {"free": 200.0, "used": 0.0, "total": 200.0},
+        })
+        holdings = self.trader.get_holdings()
+        self.assertEqual(holdings, {})
+
+    def test_returns_empty_dict_when_all_balances_zero(self):
+        self._set_balance({
+            "BTC": {"free": 0.0, "used": 0.0, "total": 0.0},
+            "ETH": {"free": 0.0, "used": 0.0, "total": 0.0},
+        })
+        holdings = self.trader.get_holdings()
+        self.assertEqual(holdings, {})
+
+    def test_symbol_format_is_base_slash_usd(self):
+        self._set_balance({
+            "SOL": {"free": 10.0, "used": 0.0, "total": 10.0},
+        })
+        holdings = self.trader.get_holdings()
+        self.assertIn("SOL/USD", holdings)
+
+    def test_quantity_key_present_in_each_entry(self):
+        self._set_balance({
+            "ETH": {"free": 3.0, "used": 0.0, "total": 3.0},
+        })
+        holdings = self.trader.get_holdings()
+        self.assertIn("quantity", holdings["ETH/USD"])
+
+    def test_non_dict_currency_value_is_skipped(self):
+        # ccxt sometimes includes top-level string/numeric values; they must be ignored
+        self._set_balance({
+            "BTC": {"free": 1.0, "used": 0.0, "total": 1.0},
+            "WEIRDKEY": "not-a-dict",
+        })
+        holdings = self.trader.get_holdings()
+        self.assertNotIn("WEIRDKEY/USD", holdings)
+        self.assertIn("BTC/USD", holdings)
+
+
 if __name__ == "__main__":
     unittest.main()
 
