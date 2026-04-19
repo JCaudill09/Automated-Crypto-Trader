@@ -496,8 +496,8 @@ class TestComputeVolumeProfile(unittest.TestCase):
     def test_higher_volume_bin_wins(self):
         # All volume concentrated at price 200 → POC near 200
         ohlcv = [
-            [0, 100.0, 100.0, 100.0, 100.0, 1.0],   # low volume at 100
-            [0, 200.0, 200.0, 200.0, 200.0, 10000.0],  # high volume at 200
+            [0, 100.0, 100.0, 100.0, 100.0, 1.0],      # low volume at 100
+            [0, 200.0, 200.0, 200.0, 200.0, 10000.0],   # high volume at 200
         ]
         result = CryptoTrader._compute_volume_profile(ohlcv, num_bins=10)
         self.assertGreater(result["poc"], 150.0)

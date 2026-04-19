@@ -650,8 +650,13 @@ class CryptoTrader:
         dict
             ``{"poc": float}`` — the Point of Control price level.
         """
-        min_price = min(candle[3] for candle in ohlcv)  # min of lows
-        max_price = max(candle[2] for candle in ohlcv)  # max of highs
+        min_price = float("inf")
+        max_price = float("-inf")
+        for candle in ohlcv:
+            if candle[3] < min_price:
+                min_price = candle[3]
+            if candle[2] > max_price:
+                max_price = candle[2]
 
         if max_price <= min_price:
             return {"poc": float(ohlcv[-1][4])}  # fallback: last close
@@ -666,7 +671,12 @@ class CryptoTrader:
             )
             volume_bins[bin_idx] += candle[5]
 
-        poc_bin = volume_bins.index(max(volume_bins))
+        poc_bin = 0
+        poc_volume = volume_bins[0]
+        for i in range(1, num_bins):
+            if volume_bins[i] > poc_volume:
+                poc_volume = volume_bins[i]
+                poc_bin = i
         poc_price = min_price + (poc_bin + 0.5) * bin_size
         return {"poc": poc_price}
 
