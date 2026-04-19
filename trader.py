@@ -487,7 +487,7 @@ class CryptoTrader:
                 )
 
         logger.info(
-            "buy_bundle '%s' — placed %d / %d order(s)",
+            "buy_bundle '%s' — placed %d / %d orders",
             bundle_name,
             len(orders),
             len(symbols),

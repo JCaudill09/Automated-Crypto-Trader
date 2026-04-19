@@ -949,7 +949,7 @@ class TestBuyBundle(unittest.TestCase):
         self.assertIn(good_vol_sym, orders)
 
     def test_order_size_error_symbol_is_skipped(self):
-        """An amount outside the allowed range skips the bundle but raises nothing."""
+        """An amount outside the allowed range skips all symbols in the bundle but raises nothing."""
         trader = _make_trader(paper_trading=True)
         _set_ticker_for_bundle(trader, self.PRICE)
         # Use an amount that is below MIN_BUY_ORDER to trigger OrderSizeError
