@@ -42,9 +42,13 @@ def _set_price(trader: CryptoTrader, symbol: str, price: float) -> None:
     }
 
 
-def _make_ohlcv(closes: list) -> list:
-    """Build a minimal OHLCV list from a sequence of close prices."""
-    return [[0, 0, 0, 0, c, 0] for c in closes]
+def _make_ohlcv(closes: list, volume: float = 1000.0) -> list:
+    """Build a minimal OHLCV list from a sequence of close prices.
+
+    Sets open = high = low = close = c so that typical_price == c, making
+    VWAP and Volume Profile deterministic in tests.
+    """
+    return [[0, c, c, c, c, volume] for c in closes]
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +85,18 @@ class TestConfig(unittest.TestCase):
 
     def test_min_volume_usd_positive(self):
         self.assertGreater(config.MIN_VOLUME_USD, 0)
+
+    def test_simple_algo_short_period(self):
+        self.assertEqual(config.SIMPLE_ALGO_SHORT_PERIOD, 9)
+
+    def test_simple_algo_long_period(self):
+        self.assertEqual(config.SIMPLE_ALGO_LONG_PERIOD, 21)
+
+    def test_simple_algo_short_less_than_long(self):
+        self.assertLess(config.SIMPLE_ALGO_SHORT_PERIOD, config.SIMPLE_ALGO_LONG_PERIOD)
+
+    def test_volume_profile_bins_positive(self):
+        self.assertGreater(config.VOLUME_PROFILE_BINS, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +432,112 @@ class TestComputeRSI(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# VWAP computation tests
+# ---------------------------------------------------------------------------
+
+class TestComputeVWAP(unittest.TestCase):
+    def test_vwap_uniform_volume_equals_price_mean(self):
+        # With equal volumes and high=low=close=c, VWAP = mean(closes)
+        closes = [10.0, 20.0, 30.0]
+        ohlcv = _make_ohlcv(closes, volume=500.0)
+        vwap = CryptoTrader._compute_vwap(ohlcv)
+        self.assertAlmostEqual(vwap, 20.0, places=6)
+
+    def test_vwap_single_candle_equals_typical_price(self):
+        # Single candle: typical = (high + low + close) / 3
+        ohlcv = [[0, 100.0, 120.0, 80.0, 100.0, 1000.0]]
+        vwap = CryptoTrader._compute_vwap(ohlcv)
+        expected = (120.0 + 80.0 + 100.0) / 3.0
+        self.assertAlmostEqual(vwap, expected, places=6)
+
+    def test_vwap_higher_volume_candle_pulls_average(self):
+        # Two candles: price=10 volume=1, price=100 volume=9
+        # VWAP = (10*1 + 100*9) / 10 = 91
+        ohlcv = [
+            [0, 10.0, 10.0, 10.0, 10.0, 1.0],
+            [0, 100.0, 100.0, 100.0, 100.0, 9.0],
+        ]
+        vwap = CryptoTrader._compute_vwap(ohlcv)
+        self.assertAlmostEqual(vwap, 91.0, places=6)
+
+    def test_vwap_raises_when_total_volume_is_zero(self):
+        ohlcv = _make_ohlcv([50.0, 60.0], volume=0.0)
+        with self.assertRaises(ValueError):
+            CryptoTrader._compute_vwap(ohlcv)
+
+    def test_vwap_is_float(self):
+        ohlcv = _make_ohlcv([100.0, 200.0, 300.0])
+        self.assertIsInstance(CryptoTrader._compute_vwap(ohlcv), float)
+
+
+# ---------------------------------------------------------------------------
+# Volume Profile computation tests
+# ---------------------------------------------------------------------------
+
+class TestComputeVolumeProfile(unittest.TestCase):
+    def test_returns_dict_with_poc_key(self):
+        ohlcv = _make_ohlcv([100.0, 110.0, 120.0])
+        result = CryptoTrader._compute_volume_profile(ohlcv)
+        self.assertIn("poc", result)
+
+    def test_poc_is_within_price_range(self):
+        closes = [float(i) for i in range(100, 200)]
+        ohlcv = _make_ohlcv(closes)
+        result = CryptoTrader._compute_volume_profile(ohlcv, num_bins=10)
+        self.assertGreaterEqual(result["poc"], 100.0)
+        self.assertLessEqual(result["poc"], 200.0)
+
+    def test_fallback_to_last_close_when_all_prices_equal(self):
+        # min_price == max_price → bin_size is zero; fallback returns last close
+        ohlcv = _make_ohlcv([50.0, 50.0, 50.0])
+        result = CryptoTrader._compute_volume_profile(ohlcv)
+        self.assertAlmostEqual(result["poc"], 50.0, places=6)
+
+    def test_higher_volume_bin_wins(self):
+        # All volume concentrated at price 200 → POC near 200
+        ohlcv = [
+            [0, 100.0, 100.0, 100.0, 100.0, 1.0],   # low volume at 100
+            [0, 200.0, 200.0, 200.0, 200.0, 10000.0],  # high volume at 200
+        ]
+        result = CryptoTrader._compute_volume_profile(ohlcv, num_bins=10)
+        self.assertGreater(result["poc"], 150.0)
+
+    def test_poc_is_float(self):
+        ohlcv = _make_ohlcv([100.0, 110.0, 120.0])
+        self.assertIsInstance(CryptoTrader._compute_volume_profile(ohlcv)["poc"], float)
+
+
+# ---------------------------------------------------------------------------
+# SimpleAlgo signal computation tests
+# ---------------------------------------------------------------------------
+
+class TestComputeSimpleAlgoSignal(unittest.TestCase):
+    def test_bullish_when_rising_series(self):
+        # Strictly rising: short EMA > long EMA
+        closes = [float(i) for i in range(1, 30)]
+        self.assertTrue(CryptoTrader._compute_simple_algo_signal(closes))
+
+    def test_bearish_when_falling_series(self):
+        # Strictly falling: short EMA < long EMA
+        closes = [float(i) for i in range(30, 0, -1)]
+        self.assertFalse(CryptoTrader._compute_simple_algo_signal(closes))
+
+    def test_returns_false_when_too_few_candles(self):
+        closes = [100.0] * (config.SIMPLE_ALGO_LONG_PERIOD - 1)
+        self.assertFalse(CryptoTrader._compute_simple_algo_signal(closes))
+
+    def test_returns_bool(self):
+        closes = [float(i) for i in range(1, 30)]
+        result = CryptoTrader._compute_simple_algo_signal(closes)
+        self.assertIsInstance(result, bool)
+
+    def test_exactly_long_period_candles_does_not_raise(self):
+        closes = [float(i) for i in range(1, config.SIMPLE_ALGO_LONG_PERIOD + 1)]
+        # Should not raise
+        CryptoTrader._compute_simple_algo_signal(closes)
+
+
+# ---------------------------------------------------------------------------
 # get_indicators tests
 # ---------------------------------------------------------------------------
 
@@ -424,19 +546,21 @@ class TestGetIndicators(unittest.TestCase):
 
     def setUp(self):
         self.trader = _make_trader()
-        # Build enough synthetic closes (rising then flat)
-        n = config.EMA_PERIOD + config.RSI_PERIOD + 20
+        # Build enough synthetic candles (rising then flat)
+        n = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 20
         closes = [float(i) for i in range(1, n + 1)]
         self.trader.exchange.fetch_ohlcv.return_value = _make_ohlcv(closes)
 
-    def test_returns_price_ema200_rsi_keys(self):
+    def test_returns_expected_indicator_keys(self):
         result = self.trader.get_indicators(self.SYMBOL)
         self.assertIn("price", result)
-        self.assertIn("ema200", result)
+        self.assertIn("vwap", result)
         self.assertIn("rsi", result)
+        self.assertIn("volume_profile_poc", result)
+        self.assertIn("simple_algo_signal", result)
 
     def test_price_equals_last_close(self):
-        n = config.EMA_PERIOD + config.RSI_PERIOD + 20
+        n = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 20
         closes = [float(i) for i in range(1, n + 1)]
         self.trader.exchange.fetch_ohlcv.return_value = _make_ohlcv(closes)
         result = self.trader.get_indicators(self.SYMBOL)
@@ -444,7 +568,7 @@ class TestGetIndicators(unittest.TestCase):
 
     def test_fetch_ohlcv_called_with_correct_limit(self):
         self.trader.get_indicators(self.SYMBOL, timeframe="4h")
-        expected_limit = config.EMA_PERIOD + config.RSI_PERIOD + 10
+        expected_limit = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10
         self.trader.exchange.fetch_ohlcv.assert_called_once_with(
             self.SYMBOL, "4h", limit=expected_limit
         )
@@ -457,10 +581,19 @@ class TestGetIndicators(unittest.TestCase):
 class TestShouldBuy(unittest.TestCase):
     SYMBOL = "BTC/USD"
 
-    def _set_indicators(self, trader, price, ema200, rsi, quote_volume=None):
+    def _set_indicators(self, trader, price, vwap, rsi,
+                        volume_profile_poc=None, simple_algo_signal=True,
+                        quote_volume=None):
         """Patch get_indicators to return controlled values and set up a ticker mock."""
+        poc = volume_profile_poc if volume_profile_poc is not None else price - 10.0
         trader.get_indicators = MagicMock(
-            return_value={"price": price, "ema200": ema200, "rsi": rsi}
+            return_value={
+                "price": price,
+                "vwap": vwap,
+                "rsi": rsi,
+                "volume_profile_poc": poc,
+                "simple_algo_signal": simple_algo_signal,
+            }
         )
         vol = quote_volume if quote_volume is not None else config.MIN_VOLUME_USD * 10
         trader.exchange.fetch_ticker.return_value = {
@@ -469,33 +602,53 @@ class TestShouldBuy(unittest.TestCase):
             "quoteVolume": vol,
         }
 
-    def test_buy_signal_when_price_above_ema_and_rsi_oversold(self):
+    def test_buy_signal_when_all_conditions_met(self):
         trader = _make_trader()
-        self._set_indicators(trader, price=110.0, ema200=100.0, rsi=25.0)
+        self._set_indicators(trader, price=110.0, vwap=100.0, rsi=25.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_price_below_ema(self):
+    def test_no_signal_when_price_below_vwap(self):
         trader = _make_trader()
-        self._set_indicators(trader, price=90.0, ema200=100.0, rsi=25.0)
+        self._set_indicators(trader, price=90.0, vwap=100.0, rsi=25.0)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_price_below_poc(self):
+        trader = _make_trader()
+        self._set_indicators(trader, price=90.0, vwap=80.0, rsi=25.0,
+                             volume_profile_poc=100.0)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_algo_signal_bearish(self):
+        trader = _make_trader()
+        self._set_indicators(trader, price=110.0, vwap=100.0, rsi=25.0,
+                             simple_algo_signal=False)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
     def test_no_signal_when_rsi_not_oversold(self):
         trader = _make_trader()
-        self._set_indicators(trader, price=110.0, ema200=100.0, rsi=50.0)
+        self._set_indicators(trader, price=110.0, vwap=100.0, rsi=50.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
     def test_no_signal_when_rsi_at_exact_oversold_threshold(self):
         # RSI must be *below* the threshold, not equal
         trader = _make_trader()
         self._set_indicators(
-            trader, price=110.0, ema200=100.0, rsi=config.RSI_OVERSOLD
+            trader, price=110.0, vwap=100.0, rsi=config.RSI_OVERSOLD
         )
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_both_conditions_fail(self):
+    def test_no_signal_when_multiple_conditions_fail(self):
         trader = _make_trader()
-        self._set_indicators(trader, price=90.0, ema200=100.0, rsi=60.0)
+        self._set_indicators(trader, price=90.0, vwap=100.0, rsi=60.0,
+                             simple_algo_signal=False)
         self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_buy_fires_when_price_equals_poc(self):
+        # price >= poc (not strictly greater), so price == poc should still fire
+        trader = _make_trader()
+        self._set_indicators(trader, price=100.0, vwap=90.0, rsi=25.0,
+                             volume_profile_poc=100.0)
+        self.assertTrue(trader.should_buy(self.SYMBOL))
 
 
 # ---------------------------------------------------------------------------
@@ -645,7 +798,13 @@ class TestVolumeIntegration(unittest.TestCase):
     def _bullish_indicators(self, trader):
         """Patch get_indicators so the technical conditions fire."""
         trader.get_indicators = MagicMock(
-            return_value={"price": 110.0, "ema200": 100.0, "rsi": 25.0}
+            return_value={
+                "price": 110.0,
+                "vwap": 100.0,
+                "volume_profile_poc": 100.0,
+                "simple_algo_signal": True,
+                "rsi": 25.0,
+            }
         )
 
     def test_should_buy_false_when_volume_insufficient(self):
