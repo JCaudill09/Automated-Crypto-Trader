@@ -22,8 +22,12 @@ STOP_LOSS_PCT   = 0.025   # Close position when price falls 2.5 % below entry
 # Technical indicator settings
 EMA_PERIOD     = 200   # 200-period Exponential Moving Average (utility; not used by buy signal)
 RSI_PERIOD     = 14    # RSI look-back period (Wilder smoothing)
-RSI_OVERSOLD   = 30    # RSI below this level → oversold (potential buy)
+RSI_OVERSOLD   = 40    # RSI below this level → oversold (potential buy)
 RSI_OVERBOUGHT = 70    # RSI above this level → overbought (potential sell)
+
+# ATR (Average True Range) settings
+ATR_PERIOD              = 14   # Look-back period for ATR computation
+ATR_STOP_LOSS_MULTIPLIER = 1.5  # Stop-loss distance = ATR_STOP_LOSS_MULTIPLIER × ATR
 
 # SimpleAlgo signal — EMA crossover proxy (short over long = bullish momentum)
 SIMPLE_ALGO_SHORT_PERIOD = 9    # Short-term EMA period

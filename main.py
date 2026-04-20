@@ -165,17 +165,28 @@ def main():
                     entry_price = positions[symbol]["entry_price"]
                     tp_order_id = positions[symbol].get("tp_order_id")
                     sl_order_id = positions[symbol].get("sl_order_id")
-                    result = bot.check_exit_orders(
-                        symbol, tp_order_id, sl_order_id, entry_price
-                    )
-                    if result in ("take_profit", "stop_loss"):
-                        quantity = positions[symbol]["quantity"]
+                    quantity = positions[symbol]["quantity"]
+                    # RSI-based take-profit exit (overbought signal)
+                    if bot.should_sell(symbol):
                         sell_order = bot.sell(symbol, quantity)
                         logging.info(
-                            "Closed position (%s): %s qty=%s @ %s",
-                            result, symbol, quantity, sell_order.get("price"),
+                            "Closed position (rsi_overbought): %s qty=%s @ %s",
+                            symbol,
+                            quantity,
+                            sell_order.get("price"),
                         )
                         del positions[symbol]
+                    else:
+                        result = bot.check_exit_orders(
+                            symbol, tp_order_id, sl_order_id, entry_price
+                        )
+                        if result in ("take_profit", "stop_loss"):
+                            sell_order = bot.sell(symbol, quantity)
+                            logging.info(
+                                "Closed position (%s): %s qty=%s @ %s",
+                                result, symbol, quantity, sell_order.get("price"),
+                            )
+                            del positions[symbol]
             except ccxt.InsufficientFunds as e:
                 logging.warning("Insufficient funds for %s — order skipped: %s", symbol, e)
             except Exception as e:
