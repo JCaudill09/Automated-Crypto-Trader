@@ -1523,7 +1523,7 @@ class TestPlaceExitOrders(unittest.TestCase):
         expected = entry - config.ATR_STOP_LOSS_MULTIPLIER * self._ATR_VALUE
         self.assertAlmostEqual(result["stop_loss_price"], expected)
 
-    def test_paper_no_exchange_create_order_calls(self):
+    def test_paper_does_not_call_create_order(self):
         self.trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
         self.trader.exchange.create_order.assert_not_called()
 

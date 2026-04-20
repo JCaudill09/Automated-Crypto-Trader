@@ -997,10 +997,9 @@ class CryptoTrader:
         rsi_overbought = indicators["rsi"] > config.RSI_OVERBOUGHT
 
         logger.info(
-            "should_sell %s — rsi=%.2f rsi_overbought=%s → signal=%s",
+            "should_sell %s — rsi=%.2f → rsi_overbought=%s",
             symbol,
             indicators["rsi"],
-            rsi_overbought,
             rsi_overbought,
         )
         return rsi_overbought
