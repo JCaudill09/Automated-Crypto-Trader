@@ -22,16 +22,16 @@ STOP_LOSS_PCT   = 0.025   # Close position when price falls 2.5 % below entry
 # Technical indicator settings
 EMA_PERIOD     = 200   # 200-period Exponential Moving Average (utility; not used by buy signal)
 RSI_PERIOD     = 14    # RSI look-back period (Wilder smoothing)
-RSI_OVERSOLD   = 40    # RSI below this level → oversold (potential buy)
+RSI_OVERSOLD   = 50    # RSI below this level → buy signal (< 50, momentum not yet overbought)
 RSI_OVERBOUGHT = 70    # RSI above this level → overbought (potential sell)
 
 # ATR (Average True Range) settings
 ATR_PERIOD              = 14   # Look-back period for ATR computation
 ATR_STOP_LOSS_MULTIPLIER = 1.5  # Stop-loss distance = ATR_STOP_LOSS_MULTIPLIER × ATR
 
-# SimpleAlgo signal — EMA crossover proxy (short over long = bullish momentum)
-SIMPLE_ALGO_SHORT_PERIOD = 9    # Short-term EMA period
-SIMPLE_ALGO_LONG_PERIOD  = 21   # Long-term EMA period
+# EMA golden-cross signal — EMA 50 crossing above EMA 200 indicates a bullish trend
+SIMPLE_ALGO_SHORT_PERIOD = 50   # Short-term EMA period (EMA 50)
+SIMPLE_ALGO_LONG_PERIOD  = 200  # Long-term EMA period (EMA 200)
 
 # Volume Profile HD settings
 VOLUME_PROFILE_BINS = 50  # Number of equal-width price bins for the volume profile
@@ -54,7 +54,7 @@ MIN_VOLUME_USD = 50_000.0  # $50,000
 # Maximum allowed bid-ask spread expressed as a fraction of the ask price.
 # A spread above this threshold indicates insufficient liquidity or a
 # market-maker-dominated book, and no buy order or buy signal is issued.
-MAX_BID_ASK_SPREAD_PCT = 0.005  # 0.5 %
+MAX_BID_ASK_SPREAD_PCT = 0.01  # 1 %
 
 # ---------------------------------------------------------------------------
 # Order bundles

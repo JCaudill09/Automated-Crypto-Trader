@@ -37,7 +37,7 @@ def _make_ticker(
 
     Defaults produce a ticker that passes both the volume and spread checks:
     - ``quoteVolume`` is 10× the required minimum (10 % of market cap).
-    - ``bid`` is 0.1 % below ``ask``, giving a 0.1 % spread (< 0.5 % max).
+    - ``bid`` is 0.1 % below ``ask``, giving a 0.1 % spread (< 1 % max).
     """
     ask = price
     if bid is None:
@@ -126,7 +126,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.RSI_PERIOD, 14)
 
     def test_rsi_oversold(self):
-        self.assertEqual(config.RSI_OVERSOLD, 40)
+        self.assertEqual(config.RSI_OVERSOLD, 50)
 
     def test_rsi_overbought(self):
         self.assertEqual(config.RSI_OVERBOUGHT, 70)
@@ -144,10 +144,10 @@ class TestConfig(unittest.TestCase):
         self.assertGreater(config.MAX_BID_ASK_SPREAD_PCT, 0)
 
     def test_simple_algo_short_period(self):
-        self.assertEqual(config.SIMPLE_ALGO_SHORT_PERIOD, 9)
+        self.assertEqual(config.SIMPLE_ALGO_SHORT_PERIOD, 50)
 
     def test_simple_algo_long_period(self):
-        self.assertEqual(config.SIMPLE_ALGO_LONG_PERIOD, 21)
+        self.assertEqual(config.SIMPLE_ALGO_LONG_PERIOD, 200)
 
     def test_simple_algo_short_less_than_long(self):
         self.assertLess(config.SIMPLE_ALGO_SHORT_PERIOD, config.SIMPLE_ALGO_LONG_PERIOD)
@@ -611,13 +611,13 @@ class TestComputeVolumeProfile(unittest.TestCase):
 
 class TestComputeSimpleAlgoSignal(unittest.TestCase):
     def test_bullish_when_rising_series(self):
-        # Strictly rising: short EMA > long EMA
-        closes = [float(i) for i in range(1, 30)]
+        # Strictly rising: EMA 50 > EMA 200 (golden cross state)
+        closes = [float(i) for i in range(1, 210)]
         self.assertTrue(CryptoTrader._compute_simple_algo_signal(closes))
 
     def test_bearish_when_falling_series(self):
-        # Strictly falling: short EMA < long EMA
-        closes = [float(i) for i in range(30, 0, -1)]
+        # Strictly falling: EMA 50 < EMA 200
+        closes = [float(i) for i in range(210, 0, -1)]
         self.assertFalse(CryptoTrader._compute_simple_algo_signal(closes))
 
     def test_returns_false_when_too_few_candles(self):
@@ -625,7 +625,7 @@ class TestComputeSimpleAlgoSignal(unittest.TestCase):
         self.assertFalse(CryptoTrader._compute_simple_algo_signal(closes))
 
     def test_returns_bool(self):
-        closes = [float(i) for i in range(1, 30)]
+        closes = [float(i) for i in range(1, 210)]
         result = CryptoTrader._compute_simple_algo_signal(closes)
         self.assertIsInstance(result, bool)
 
@@ -704,9 +704,11 @@ class TestShouldBuy(unittest.TestCase):
         self._set_indicators(trader, price=110.0, vwap=100.0, rsi=25.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_price_below_vwap(self):
+    def test_no_signal_when_ema50_below_ema200(self):
+        # EMA 50 below EMA 200 (no golden cross) → no buy signal
         trader = _make_trader()
-        self._set_indicators(trader, price=90.0, vwap=100.0, rsi=25.0)
+        self._set_indicators(trader, price=90.0, vwap=100.0, rsi=25.0,
+                             simple_algo_signal=False)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
     def test_buy_signal_fires_regardless_of_volume_profile_poc(self):
@@ -717,13 +719,12 @@ class TestShouldBuy(unittest.TestCase):
                              volume_profile_poc=100.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
-    def test_buy_signal_fires_regardless_of_algo_signal(self):
-        # SimpleAlgo signal is no longer a buy condition; a bearish algo
-        # signal with price above VWAP and RSI oversold should still buy.
+    def test_no_signal_when_ema50_below_ema200_regardless_of_price(self):
+        # EMA golden cross is required; price above VWAP alone is not enough.
         trader = _make_trader()
         self._set_indicators(trader, price=110.0, vwap=100.0, rsi=25.0,
                              simple_algo_signal=False)
-        self.assertTrue(trader.should_buy(self.SYMBOL))
+        self.assertFalse(trader.should_buy(self.SYMBOL))
 
     def test_no_signal_when_rsi_not_oversold(self):
         trader = _make_trader()
@@ -745,9 +746,9 @@ class TestShouldBuy(unittest.TestCase):
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
     def test_buy_fires_when_rsi_just_below_new_threshold(self):
-        # RSI = 39 is below the new threshold of 40, so a buy signal fires.
+        # RSI = 49 is below the threshold of 50, so a buy signal fires.
         trader = _make_trader()
-        self._set_indicators(trader, price=110.0, vwap=100.0, rsi=39.0)
+        self._set_indicators(trader, price=110.0, vwap=100.0, rsi=49.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
 
@@ -1012,26 +1013,26 @@ class TestCheckSpread(unittest.TestCase):
         self.trader.exchange.fetch_ticker.return_value = _make_ticker(self.PRICE, bid=bid)
 
     def test_passes_when_spread_below_maximum(self):
-        # 0.1 % spread — well below 0.5 % max
+        # 0.1 % spread — well below 1 % max
         self._set_spread(self.PRICE * (1.0 - 0.001))
         self.trader._check_spread(self.SYMBOL)  # should not raise
 
     def test_passes_when_spread_just_below_maximum(self):
-        # spread just under 0.5 %
+        # spread just under 1 %
         bid = self.PRICE * (1.0 - (config.MAX_BID_ASK_SPREAD_PCT - 1e-6))
         self._set_spread(bid)
         self.trader._check_spread(self.SYMBOL)  # should not raise
 
     def test_raises_when_spread_at_maximum(self):
-        # spread exactly at 0.5 % → should raise (>= threshold)
+        # spread exactly at 1 % → should raise (>= threshold)
         bid = self.PRICE * (1.0 - config.MAX_BID_ASK_SPREAD_PCT)
         self._set_spread(bid)
         with self.assertRaises(WideBidAskSpreadError):
             self.trader._check_spread(self.SYMBOL)
 
     def test_raises_when_spread_above_maximum(self):
-        # 1 % spread — above 0.5 % max
-        self._set_spread(self.PRICE * (1.0 - 0.01))
+        # 1.5 % spread — above 1 % max
+        self._set_spread(self.PRICE * (1.0 - 0.015))
         with self.assertRaises(WideBidAskSpreadError):
             self.trader._check_spread(self.SYMBOL)
 
@@ -1050,14 +1051,14 @@ class TestCheckSpread(unittest.TestCase):
             self.trader._check_spread(self.SYMBOL)
 
     def test_error_message_contains_symbol(self):
-        self._set_spread(self.PRICE * (1.0 - 0.01))  # wide spread
+        self._set_spread(self.PRICE * (1.0 - 0.015))  # wide spread
         with self.assertRaises(WideBidAskSpreadError) as ctx:
             self.trader._check_spread(self.SYMBOL)
         self.assertIn(self.SYMBOL, str(ctx.exception))
 
     def test_buy_raises_when_spread_too_wide(self):
         """buy() should raise WideBidAskSpreadError when spread ≥ MAX_BID_ASK_SPREAD_PCT."""
-        self._set_spread(self.PRICE * (1.0 - 0.01))
+        self._set_spread(self.PRICE * (1.0 - 0.015))
         with self.assertRaises(WideBidAskSpreadError):
             self.trader.buy(self.SYMBOL, 40.0)
         self.trader.exchange.create_market_buy_order.assert_not_called()
@@ -1067,7 +1068,7 @@ class TestCheckSpread(unittest.TestCase):
         trader = _make_trader()
         price = 110.0
         trader.exchange.fetch_ticker.return_value = _make_ticker(
-            price, bid=price * (1.0 - 0.01)  # 1 % spread
+            price, bid=price * (1.0 - 0.015)  # 1.5 % spread
         )
         trader.get_indicators = MagicMock(
             return_value={
