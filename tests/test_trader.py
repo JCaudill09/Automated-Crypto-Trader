@@ -16,14 +16,10 @@ from trader import CryptoTrader, OrderSizeError, InsufficientVolumeError, WideBi
 # Test constants
 # ---------------------------------------------------------------------------
 
-# Market-cap value used in ticker mocks.  4 % of this value is the minimum
-# acceptable 24-hour quote volume under the new liquidity rule.
-_TEST_MARKET_CAP = 1_000_000.0
 
-
-def _min_volume(market_cap: float = _TEST_MARKET_CAP) -> float:
-    """Return the minimum required 24-hour volume for *market_cap*."""
-    return market_cap * config.MIN_VOLUME_MARKET_CAP_PCT
+def _min_volume() -> float:
+    """Return the minimum required 24-hour volume."""
+    return config.MIN_VOLUME_USD
 
 
 def _make_ticker(
@@ -31,25 +27,24 @@ def _make_ticker(
     *,
     bid: float | None = None,
     quote_volume: float | None = None,
-    market_cap: float = _TEST_MARKET_CAP,
 ) -> dict:
     """Build a minimal ticker dict suitable for mocking ``fetch_ticker``.
 
     Defaults produce a ticker that passes both the volume and spread checks:
-    - ``quoteVolume`` is 10× the required minimum (10 % of market cap).
+    - ``quoteVolume`` is 10× the required minimum.
     - ``bid`` is 0.1 % below ``ask``, giving a 0.1 % spread (< 1 % max).
     """
     ask = price
     if bid is None:
         bid = price * (1.0 - 0.001)  # 0.1 % spread — passes spread check
     if quote_volume is None:
-        quote_volume = market_cap * config.MIN_VOLUME_MARKET_CAP_PCT * 10
+        quote_volume = config.MIN_VOLUME_USD * 10
     return {
         "ask": ask,
         "bid": bid,
         "last": price,
         "quoteVolume": quote_volume,
-        "info": {"market_cap": market_cap},
+        "info": {},
     }
 
 
@@ -137,8 +132,8 @@ class TestConfig(unittest.TestCase):
     def test_atr_stop_loss_multiplier(self):
         self.assertAlmostEqual(config.ATR_STOP_LOSS_MULTIPLIER, 1.5)
 
-    def test_min_volume_market_cap_pct_positive(self):
-        self.assertGreater(config.MIN_VOLUME_MARKET_CAP_PCT, 0)
+    def test_min_volume_usd_positive(self):
+        self.assertGreater(config.MIN_VOLUME_USD, 0)
 
     def test_max_bid_ask_spread_pct_positive(self):
         self.assertGreater(config.MAX_BID_ASK_SPREAD_PCT, 0)
@@ -898,7 +893,7 @@ class TestCheckVolume(unittest.TestCase):
             "bid": 0.999,
             "last": 1.0,
             "quoteVolume": None,
-            "info": {"market_cap": _TEST_MARKET_CAP},
+            "info": {},
         }
         with self.assertRaises(InsufficientVolumeError):
             self.trader._check_volume(self.SYMBOL)
@@ -908,12 +903,12 @@ class TestCheckVolume(unittest.TestCase):
             "ask": 1.0,
             "bid": 0.999,
             "last": 1.0,
-            "info": {"market_cap": _TEST_MARKET_CAP},
+            "info": {},
         }
         with self.assertRaises(InsufficientVolumeError):
             self.trader._check_volume(self.SYMBOL)
 
-    def test_passes_when_market_cap_missing_but_volume_above_fallback(self):
+    def test_passes_when_volume_above_absolute_minimum(self):
         self.trader.exchange.fetch_ticker.return_value = {
             "ask": 1.0,
             "bid": 0.999,
@@ -923,7 +918,7 @@ class TestCheckVolume(unittest.TestCase):
         }
         self.trader._check_volume(self.SYMBOL)  # should not raise
 
-    def test_raises_when_market_cap_missing_and_volume_below_fallback(self):
+    def test_raises_when_volume_below_absolute_minimum(self):
         self.trader.exchange.fetch_ticker.return_value = {
             "ask": 1.0,
             "bid": 0.999,
