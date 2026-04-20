@@ -10,19 +10,17 @@ Order constraints
 
 Trade signals
 -------------
-- Buy  : all four conditions must be satisfied simultaneously:
-         (1) price is above VWAP → confirmed intraday uptrend;
-         (2) price is at or above the Volume Profile Point of Control →
-             price is sitting above the highest-volume support level;
-         (3) SimpleAlgo EMA-crossover signal is bullish (short-term EMA
-             above long-term EMA) → positive momentum;
-         (4) RSI is below the oversold threshold
-             (config.RSI_OVERSOLD, default 30) → oversold entry.
-         The 24-hour quote-volume check and the bid-ask spread check must
-         also pass.
-- Exit : take profit when price rises 7.5 % above entry
-         (config.TAKE_PROFIT_PCT); stop loss when price falls 2.5 % below
-         entry (config.STOP_LOSS_PCT).
+- Filter (Trend) : price must be **above** the VWAP → confirmed intraday
+                   uptrend before a buy is considered.
+- Trigger (Momentum) : RSI must be **below** ``config.RSI_OVERSOLD``
+                        (default 40) → asset is oversold / cheap.
+  Both conditions together (plus the 24-hour quote-volume and bid-ask
+  spread checks) must pass for a buy signal to fire.
+- Execution (Volatility) : stop-loss is placed at
+  ``entry_price − config.ATR_STOP_LOSS_MULTIPLIER × ATR``
+  (default 1.5 × ATR), adapting risk to current market speed.
+- Exit : RSI above ``config.RSI_OVERBOUGHT`` (default 70) → asset is
+         overbought / expensive; sell to take profit.
 
 - Volume  : buy orders and buy signals are only issued when the 24-hour
            quote-currency volume is at least ``config.MIN_VOLUME_MARKET_CAP_PCT``
@@ -824,6 +822,55 @@ class CryptoTrader:
         ema_long = CryptoTrader._compute_ema(closes, config.SIMPLE_ALGO_LONG_PERIOD)
         return ema_short > ema_long
 
+    @staticmethod
+    def _compute_atr(ohlcv: list, period: int = 14) -> float:
+        """
+        Compute the Average True Range (ATR) and return the last value.
+
+        The True Range for each candle (after the first) is:
+        ``max(high − low, |high − prev_close|, |low − prev_close|)``
+
+        Uses Wilder's smoothing (RMA) seeded with the simple average of the
+        first *period* true ranges.
+
+        Parameters
+        ----------
+        ohlcv :
+            List of OHLCV candles
+            ``[timestamp, open, high, low, close, volume]``.
+        period :
+            Look-back window for the ATR (default ``config.ATR_PERIOD``, 14).
+
+        Returns
+        -------
+        float
+            ATR value.
+
+        Raises
+        ------
+        ValueError
+            If fewer than *period + 1* candles are provided.
+        """
+        if len(ohlcv) < period + 1:
+            raise ValueError(
+                f"Need at least {period + 1} candles to compute "
+                f"ATR-{period}, got {len(ohlcv)}."
+            )
+        true_ranges = []
+        for i in range(1, len(ohlcv)):
+            high = ohlcv[i][2]
+            low = ohlcv[i][3]
+            prev_close = ohlcv[i - 1][4]
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+            true_ranges.append(tr)
+
+        # Seed with simple average of first `period` true ranges
+        atr = sum(true_ranges[:period]) / period
+        # Wilder's smoothing for remaining true ranges
+        for tr in true_ranges[period:]:
+            atr = (atr * (period - 1) + tr) / period
+        return atr
+
     def get_indicators(self, symbol: str, timeframe: str = "1h") -> dict:
         """
         Fetch OHLCV candles and return the latest indicator values.
@@ -838,7 +885,7 @@ class CryptoTrader:
         Returns
         -------
         dict
-            ``{"price": float, "vwap": float, "rsi": float,
+            ``{"price": float, "vwap": float, "rsi": float, "atr": float,
             "volume_profile_poc": float, "simple_algo_signal": bool}``
         """
         limit = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10
@@ -847,16 +894,19 @@ class CryptoTrader:
 
         vwap = self._compute_vwap(ohlcv)
         rsi = self._compute_rsi(closes, config.RSI_PERIOD)
+        atr = self._compute_atr(ohlcv, config.ATR_PERIOD)
         volume_profile = self._compute_volume_profile(ohlcv, config.VOLUME_PROFILE_BINS)
         simple_algo_signal = self._compute_simple_algo_signal(closes)
         current_price = closes[-1]
 
         logger.debug(
-            "Indicators %s — price=%.4f VWAP=%.4f RSI=%.2f VP_POC=%.4f algo_signal=%s",
+            "Indicators %s — price=%.4f VWAP=%.4f RSI=%.2f ATR=%.6f "
+            "VP_POC=%.4f algo_signal=%s",
             symbol,
             current_price,
             vwap,
             rsi,
+            atr,
             volume_profile["poc"],
             simple_algo_signal,
         )
@@ -864,6 +914,7 @@ class CryptoTrader:
             "price": current_price,
             "vwap": vwap,
             "rsi": rsi,
+            "atr": atr,
             "volume_profile_poc": volume_profile["poc"],
             "simple_algo_signal": simple_algo_signal,
         }
@@ -872,17 +923,12 @@ class CryptoTrader:
         """
         Return ``True`` when the buy signal fires.
 
-        Buy conditions (all four must be met):
+        Buy conditions (both must be met):
 
         1. Current price is **above** the VWAP → confirmed intraday uptrend
-           (Volume Weighted Average Price).
-        2. Current price is **at or above** the Volume Profile Point of
-           Control → price is above the highest-volume support level
-           (Volume Profile HD).
-        3. SimpleAlgo signal is bullish → short-term EMA is above the
-           long-term EMA, indicating positive momentum.
-        4. RSI is **below** ``config.RSI_OVERSOLD`` (default 30) →
-           the asset is oversold, offering a potential entry.
+           (the trend filter).
+        2. RSI is **below** ``config.RSI_OVERSOLD`` (default 40) →
+           the asset is oversold / cheap (the momentum trigger).
 
         The minimum 24-hour volume check and the bid-ask spread check must
         also pass.
@@ -896,8 +942,6 @@ class CryptoTrader:
         """
         indicators = self.get_indicators(symbol, timeframe)
         price_above_vwap = indicators["price"] > indicators["vwap"]
-        price_above_poc = indicators["price"] >= indicators["volume_profile_poc"]
-        algo_signal = indicators["simple_algo_signal"]
         rsi_oversold = indicators["rsi"] < config.RSI_OVERSOLD
 
         try:
@@ -914,21 +958,51 @@ class CryptoTrader:
             logger.warning("should_buy %s — spread check failed: %s", symbol, exc)
             spread_ok = False
 
-        signal = price_above_vwap and price_above_poc and algo_signal and rsi_oversold and volume_ok and spread_ok
+        signal = price_above_vwap and rsi_oversold and volume_ok and spread_ok
 
         logger.info(
-            "should_buy %s — price_above_vwap=%s price_above_poc=%s "
-            "algo_signal=%s rsi_oversold=%s volume_ok=%s spread_ok=%s → signal=%s",
+            "should_buy %s — price_above_vwap=%s rsi_oversold=%s "
+            "volume_ok=%s spread_ok=%s → signal=%s",
             symbol,
             price_above_vwap,
-            price_above_poc,
-            algo_signal,
             rsi_oversold,
             volume_ok,
             spread_ok,
             signal,
         )
         return signal
+
+    def should_sell(self, symbol: str, timeframe: str = "1h") -> bool:
+        """
+        Return ``True`` when the RSI-based take-profit exit signal fires.
+
+        Sell condition:
+
+        * RSI is **above** ``config.RSI_OVERBOUGHT`` (default 70) →
+          the asset is overbought / expensive; take profit.
+
+        Parameters
+        ----------
+        symbol :
+            Trading pair, e.g. ``"BTC/USD"``.
+        timeframe :
+            Candle interval accepted by the exchange (default ``"1h"``).
+
+        Returns
+        -------
+        bool
+            ``True`` when RSI > ``config.RSI_OVERBOUGHT``.
+        """
+        indicators = self.get_indicators(symbol, timeframe)
+        rsi_overbought = indicators["rsi"] > config.RSI_OVERBOUGHT
+
+        logger.info(
+            "should_sell %s — rsi=%.2f → rsi_overbought=%s",
+            symbol,
+            indicators["rsi"],
+            rsi_overbought,
+        )
+        return rsi_overbought
 
     def get_holdings(self) -> dict:
         """
@@ -1019,8 +1093,12 @@ class CryptoTrader:
 
         A **limit sell** is placed at the take-profit price
         (``entry_price × (1 + config.TAKE_PROFIT_PCT)``) and a
-        **stop-market sell** is placed at the stop-loss price
-        (``entry_price × (1 − config.STOP_LOSS_PCT)``).
+        **stop-market sell** is placed at the ATR-based stop-loss price
+        (``entry_price − config.ATR_STOP_LOSS_MULTIPLIER × ATR``), adapting
+        risk to current market volatility.
+
+        ATR is computed from the most recent ``config.ATR_PERIOD + 1`` hourly
+        candles fetched at call time.
 
         When the exchange fills one of the two orders the caller should
         cancel the other via :meth:`check_exit_orders`, which handles that
@@ -1066,8 +1144,14 @@ class CryptoTrader:
                 f"quantity must be positive, got {quantity}."
             )
 
+        # Compute ATR for dynamic stop-loss sizing
+        atr_ohlcv = self.exchange.fetch_ohlcv(
+            symbol, "1h", limit=config.ATR_PERIOD + 1
+        )
+        atr = self._compute_atr(atr_ohlcv, config.ATR_PERIOD)
+
         take_profit_price = entry_price * (1.0 + config.TAKE_PROFIT_PCT)
-        stop_loss_price = entry_price * (1.0 - config.STOP_LOSS_PCT)
+        stop_loss_price = entry_price - config.ATR_STOP_LOSS_MULTIPLIER * atr
 
         logger.info(
             "place_exit_orders %s — qty=%.8f entry=%.6f TP=%.6f SL=%.6f (paper=%s)",

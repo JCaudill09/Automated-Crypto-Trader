@@ -88,6 +88,17 @@ def _make_ohlcv(closes: list, volume: float = 1000.0) -> list:
     return [[0, c, c, c, c, volume] for c in closes]
 
 
+def _make_atr_ohlcv(n: int, close: float = 100.0, spread: float = 5.0) -> list:
+    """Build OHLCV candles with a constant close and fixed high-low spread.
+
+    high = close + spread, low = close - spread.  With a constant close
+    price, the True Range for each candle (after the first) equals
+    ``2 * spread``, so the ATR is also ``2 * spread``.
+    """
+    return [[0, close, close + spread, close - spread, close, 1000.0]
+            for _ in range(n)]
+
+
 # ---------------------------------------------------------------------------
 # Config tests
 # ---------------------------------------------------------------------------
@@ -115,10 +126,16 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.RSI_PERIOD, 14)
 
     def test_rsi_oversold(self):
-        self.assertEqual(config.RSI_OVERSOLD, 30)
+        self.assertEqual(config.RSI_OVERSOLD, 40)
 
     def test_rsi_overbought(self):
         self.assertEqual(config.RSI_OVERBOUGHT, 70)
+
+    def test_atr_period(self):
+        self.assertEqual(config.ATR_PERIOD, 14)
+
+    def test_atr_stop_loss_multiplier(self):
+        self.assertAlmostEqual(config.ATR_STOP_LOSS_MULTIPLIER, 1.5)
 
     def test_min_volume_market_cap_pct_positive(self):
         self.assertGreater(config.MIN_VOLUME_MARKET_CAP_PCT, 0)
@@ -472,6 +489,47 @@ class TestComputeRSI(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# ATR computation tests
+# ---------------------------------------------------------------------------
+
+class TestComputeATR(unittest.TestCase):
+    def test_atr_constant_spread_equals_twice_spread(self):
+        # With all closes equal and high = close + 5, low = close - 5:
+        # TR = max(10, 5, 5) = 10 for every candle; ATR = 10
+        ohlcv = _make_atr_ohlcv(20, close=100.0, spread=5.0)
+        atr = CryptoTrader._compute_atr(ohlcv, period=14)
+        self.assertAlmostEqual(atr, 10.0, places=6)
+
+    def test_atr_zero_spread_is_zero(self):
+        # high == low == prev_close → all TRs = 0
+        ohlcv = _make_ohlcv([100.0] * 20)
+        atr = CryptoTrader._compute_atr(ohlcv, period=14)
+        self.assertAlmostEqual(atr, 0.0, places=6)
+
+    def test_atr_is_positive_for_volatile_series(self):
+        import random
+        random.seed(0)
+        closes = [100.0 + random.uniform(-10, 10) for _ in range(30)]
+        ohlcv = _make_ohlcv(closes)
+        atr = CryptoTrader._compute_atr(ohlcv, period=14)
+        self.assertGreaterEqual(atr, 0.0)
+
+    def test_atr_raises_when_too_few_candles(self):
+        ohlcv = _make_atr_ohlcv(5)
+        with self.assertRaises(ValueError):
+            CryptoTrader._compute_atr(ohlcv, period=14)
+
+    def test_atr_exact_period_plus_one_candles(self):
+        ohlcv = _make_atr_ohlcv(15, spread=3.0)  # period=14 → needs 15 candles
+        atr = CryptoTrader._compute_atr(ohlcv, period=14)
+        self.assertAlmostEqual(atr, 6.0, places=6)  # 2 * spread
+
+    def test_atr_is_float(self):
+        ohlcv = _make_atr_ohlcv(20)
+        self.assertIsInstance(CryptoTrader._compute_atr(ohlcv, period=14), float)
+
+
+# ---------------------------------------------------------------------------
 # VWAP computation tests
 # ---------------------------------------------------------------------------
 
@@ -596,6 +654,7 @@ class TestGetIndicators(unittest.TestCase):
         self.assertIn("price", result)
         self.assertIn("vwap", result)
         self.assertIn("rsi", result)
+        self.assertIn("atr", result)
         self.assertIn("volume_profile_poc", result)
         self.assertIn("simple_algo_signal", result)
 
@@ -623,7 +682,7 @@ class TestShouldBuy(unittest.TestCase):
 
     def _set_indicators(self, trader, price, vwap, rsi,
                         volume_profile_poc=None, simple_algo_signal=True,
-                        quote_volume=None, bid=None):
+                        quote_volume=None, bid=None, atr=1.0):
         """Patch get_indicators to return controlled values and set up a ticker mock."""
         poc = volume_profile_poc if volume_profile_poc is not None else price - 10.0
         trader.get_indicators = MagicMock(
@@ -631,6 +690,7 @@ class TestShouldBuy(unittest.TestCase):
                 "price": price,
                 "vwap": vwap,
                 "rsi": rsi,
+                "atr": atr,
                 "volume_profile_poc": poc,
                 "simple_algo_signal": simple_algo_signal,
             }
@@ -649,17 +709,21 @@ class TestShouldBuy(unittest.TestCase):
         self._set_indicators(trader, price=90.0, vwap=100.0, rsi=25.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_price_below_poc(self):
+    def test_buy_signal_fires_regardless_of_volume_profile_poc(self):
+        # POC is no longer a buy condition; price below POC but above VWAP
+        # with RSI oversold should still signal a buy.
         trader = _make_trader()
         self._set_indicators(trader, price=90.0, vwap=80.0, rsi=25.0,
                              volume_profile_poc=100.0)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
+        self.assertTrue(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_algo_signal_bearish(self):
+    def test_buy_signal_fires_regardless_of_algo_signal(self):
+        # SimpleAlgo signal is no longer a buy condition; a bearish algo
+        # signal with price above VWAP and RSI oversold should still buy.
         trader = _make_trader()
         self._set_indicators(trader, price=110.0, vwap=100.0, rsi=25.0,
                              simple_algo_signal=False)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
+        self.assertTrue(trader.should_buy(self.SYMBOL))
 
     def test_no_signal_when_rsi_not_oversold(self):
         trader = _make_trader()
@@ -680,12 +744,63 @@ class TestShouldBuy(unittest.TestCase):
                              simple_algo_signal=False)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
-    def test_buy_fires_when_price_equals_poc(self):
-        # price >= poc (not strictly greater), so price == poc should still fire
+    def test_buy_fires_when_rsi_just_below_new_threshold(self):
+        # RSI = 39 is below the new threshold of 40, so a buy signal fires.
         trader = _make_trader()
-        self._set_indicators(trader, price=100.0, vwap=90.0, rsi=25.0,
-                             volume_profile_poc=100.0)
+        self._set_indicators(trader, price=110.0, vwap=100.0, rsi=39.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
+
+
+# ---------------------------------------------------------------------------
+# should_sell tests
+# ---------------------------------------------------------------------------
+
+class TestShouldSell(unittest.TestCase):
+    SYMBOL = "BTC/USD"
+
+    def _set_indicators(self, trader, rsi: float) -> None:
+        """Patch get_indicators to return a controlled RSI value."""
+        trader.get_indicators = MagicMock(
+            return_value={
+                "price": 100.0,
+                "vwap": 90.0,
+                "rsi": rsi,
+                "atr": 1.0,
+                "volume_profile_poc": 90.0,
+                "simple_algo_signal": True,
+            }
+        )
+
+    def test_sell_signal_when_rsi_above_overbought(self):
+        trader = _make_trader()
+        self._set_indicators(trader, rsi=75.0)
+        self.assertTrue(trader.should_sell(self.SYMBOL))
+
+    def test_no_sell_signal_when_rsi_below_overbought(self):
+        trader = _make_trader()
+        self._set_indicators(trader, rsi=50.0)
+        self.assertFalse(trader.should_sell(self.SYMBOL))
+
+    def test_no_sell_signal_when_rsi_equals_overbought_threshold(self):
+        # RSI must be *above* the threshold, not equal
+        trader = _make_trader()
+        self._set_indicators(trader, rsi=config.RSI_OVERBOUGHT)
+        self.assertFalse(trader.should_sell(self.SYMBOL))
+
+    def test_sell_signal_at_rsi_100(self):
+        trader = _make_trader()
+        self._set_indicators(trader, rsi=100.0)
+        self.assertTrue(trader.should_sell(self.SYMBOL))
+
+    def test_no_sell_signal_when_rsi_just_below_threshold(self):
+        trader = _make_trader()
+        self._set_indicators(trader, rsi=config.RSI_OVERBOUGHT - 0.01)
+        self.assertFalse(trader.should_sell(self.SYMBOL))
+
+    def test_should_sell_returns_bool(self):
+        trader = _make_trader()
+        self._set_indicators(trader, rsi=80.0)
+        self.assertIsInstance(trader.should_sell(self.SYMBOL), bool)
 
 
 # ---------------------------------------------------------------------------
@@ -858,6 +973,7 @@ class TestVolumeIntegration(unittest.TestCase):
             return_value={
                 "price": 110.0,
                 "vwap": 100.0,
+                "atr": 1.0,
                 "volume_profile_poc": 100.0,
                 "simple_algo_signal": True,
                 "rsi": 25.0,
@@ -957,6 +1073,7 @@ class TestCheckSpread(unittest.TestCase):
             return_value={
                 "price": price,
                 "vwap": 100.0,
+                "atr": 1.0,
                 "volume_profile_poc": 100.0,
                 "simple_algo_signal": True,
                 "rsi": 25.0,
@@ -1375,8 +1492,17 @@ class TestGetHoldings(unittest.TestCase):
 class TestPlaceExitOrders(unittest.TestCase):
     """Tests for CryptoTrader.place_exit_orders."""
 
+    # ATR spread used in OHLCV mock: ATR = 2 * _ATR_SPREAD = 10.0
+    _ATR_SPREAD = 5.0
+    _ATR_VALUE = 2 * _ATR_SPREAD  # 10.0
+
     def setUp(self):
         self.trader = _make_trader(paper_trading=True)
+        # Provide ATR OHLCV data so place_exit_orders can compute ATR
+        n = config.ATR_PERIOD + 1
+        self.trader.exchange.fetch_ohlcv.return_value = _make_atr_ohlcv(
+            n, spread=self._ATR_SPREAD
+        )
 
     # -- Paper-trading mode --------------------------------------------------
 
@@ -1394,10 +1520,10 @@ class TestPlaceExitOrders(unittest.TestCase):
     def test_paper_sl_price_correct(self):
         entry = 50_000.0
         result = self.trader.place_exit_orders("BTC/USD", 0.001, entry)
-        expected = entry * (1.0 - config.STOP_LOSS_PCT)
+        expected = entry - config.ATR_STOP_LOSS_MULTIPLIER * self._ATR_VALUE
         self.assertAlmostEqual(result["stop_loss_price"], expected)
 
-    def test_paper_no_exchange_calls(self):
+    def test_paper_does_not_call_create_order(self):
         self.trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
         self.trader.exchange.create_order.assert_not_called()
 
@@ -1425,8 +1551,15 @@ class TestPlaceExitOrders(unittest.TestCase):
 
     # -- Live-trading mode ---------------------------------------------------
 
-    def test_live_places_two_orders(self):
+    def _make_live_trader(self):
         trader = _make_trader(paper_trading=False)
+        trader.exchange.fetch_ohlcv.return_value = _make_atr_ohlcv(
+            config.ATR_PERIOD + 1, spread=self._ATR_SPREAD
+        )
+        return trader
+
+    def test_live_places_two_orders(self):
+        trader = self._make_live_trader()
         tp_mock = {"id": "tp-123"}
         sl_mock = {"id": "sl-456"}
         trader.exchange.create_order.side_effect = [tp_mock, sl_mock]
@@ -1436,7 +1569,7 @@ class TestPlaceExitOrders(unittest.TestCase):
         self.assertEqual(trader.exchange.create_order.call_count, 2)
 
     def test_live_tp_order_is_limit_sell(self):
-        trader = _make_trader(paper_trading=False)
+        trader = self._make_live_trader()
         trader.exchange.create_order.return_value = {"id": "x"}
         trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
         tp_call = trader.exchange.create_order.call_args_list[0]
@@ -1444,19 +1577,19 @@ class TestPlaceExitOrders(unittest.TestCase):
         self.assertEqual(tp_call.args[1], "limit")
         self.assertEqual(tp_call.args[2], "sell")
 
-    def test_live_sl_order_uses_stop_price(self):
-        trader = _make_trader(paper_trading=False)
+    def test_live_sl_order_uses_atr_stop_price(self):
+        trader = self._make_live_trader()
         trader.exchange.create_order.return_value = {"id": "x"}
         entry = 50_000.0
         trader.place_exit_orders("BTC/USD", 0.001, entry)
         sl_call = trader.exchange.create_order.call_args_list[1]
-        expected_sl_price = entry * (1.0 - config.STOP_LOSS_PCT)
-        # price arg (index 4) should equal the stop-loss price
+        expected_sl_price = entry - config.ATR_STOP_LOSS_MULTIPLIER * self._ATR_VALUE
+        # price arg (index 4) should equal the ATR-based stop-loss price
         self.assertAlmostEqual(sl_call.args[4], expected_sl_price)
 
     def test_live_fallback_to_stopmarket_on_exception(self):
         """If 'stop' order type fails the method falls back to 'stopMarket'."""
-        trader = _make_trader(paper_trading=False)
+        trader = self._make_live_trader()
         tp_mock = {"id": "tp-1"}
         sl_mock = {"id": "sl-2"}
         trader.exchange.create_order.side_effect = [
