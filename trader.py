@@ -18,15 +18,19 @@ Trade signals
              above long-term EMA) → positive momentum;
          (4) RSI is below the oversold threshold
              (config.RSI_OVERSOLD, default 30) → oversold entry.
-         The 24-hour quote-volume minimum check must also pass.
+         The 24-hour quote-volume check and the bid-ask spread check must
+         also pass.
 - Exit : take profit when price rises 7.5 % above entry
          (config.TAKE_PROFIT_PCT); stop loss when price falls 2.5 % below
          entry (config.STOP_LOSS_PCT).
 
 - Volume  : buy orders and buy signals are only issued when the 24-hour
-           quote-currency volume exceeds ``config.MIN_VOLUME_USD`` (default
-           $1,000,000), ensuring there is sufficient liquidity to fill and
-           exit positions.
+           quote-currency volume is at least ``config.MIN_VOLUME_MARKET_CAP_PCT``
+           (default 4 %) of the asset's market capitalisation, ensuring
+           there is sufficient liquidity to fill and exit positions.
+- Spread  : buy orders and buy signals are only issued when the bid-ask
+           spread is below ``config.MAX_BID_ASK_SPREAD_PCT`` (default 0.5 %),
+           ensuring the market is tight enough for reliable order fills.
 
 Set PAPER_TRADING = True in config.py (the default) to simulate orders
 without spending real money.
@@ -47,7 +51,11 @@ class OrderSizeError(ValueError):
 
 
 class InsufficientVolumeError(RuntimeError):
-    """Raised when 24-hour quote volume is below the configured minimum."""
+    """Raised when 24-hour quote volume is below 4 % of market capitalisation."""
+
+
+class WideBidAskSpreadError(RuntimeError):
+    """Raised when the bid-ask spread exceeds the configured maximum."""
 
 
 class CryptoTrader:
@@ -184,12 +192,14 @@ class CryptoTrader:
     def _check_volume(self, symbol: str) -> None:
         """
         Raise :class:`InsufficientVolumeError` if the 24-hour quote-currency
-        volume for *symbol* is below ``config.MIN_VOLUME_USD``.
+        volume for *symbol* is below ``config.MIN_VOLUME_MARKET_CAP_PCT`` of
+        the asset's market capitalisation.
 
         The ``quoteVolume`` field from ``fetch_ticker`` represents the total
         value traded over the last 24 hours expressed in the quote currency
-        (e.g. USD for ``BTC/USD``), making it a direct USD-denominated
-        liquidity measure.
+        (e.g. USD for ``BTC/USD``).  The market capitalisation is read from
+        the exchange-specific ``info`` dict returned alongside the standard
+        ticker fields (key ``"market_cap"``).
 
         Parameters
         ----------
@@ -200,8 +210,8 @@ class CryptoTrader:
         ------
         InsufficientVolumeError
             If the reported 24-hour quote volume is below
-            ``config.MIN_VOLUME_USD`` or if the exchange does not return a
-            volume figure.
+            ``config.MIN_VOLUME_MARKET_CAP_PCT`` of market cap, or if the
+            exchange does not return a volume or market-cap figure.
         """
         ticker = self.exchange.fetch_ticker(symbol)
         volume = ticker.get("quoteVolume")
@@ -211,16 +221,74 @@ class CryptoTrader:
                 "Cannot verify sufficient liquidity."
             )
         volume = float(volume)
-        if volume < config.MIN_VOLUME_USD:
+
+        market_cap = ticker.get("info", {}).get("market_cap")
+        if not market_cap:
             raise InsufficientVolumeError(
-                f"{symbol} 24-hour quote volume ${volume:,.2f} is below the "
-                f"required minimum of ${config.MIN_VOLUME_USD:,.2f}."
+                f"Unable to retrieve market capitalisation for {symbol}. "
+                "Cannot verify sufficient liquidity."
+            )
+        market_cap = float(market_cap)
+
+        min_volume = market_cap * config.MIN_VOLUME_MARKET_CAP_PCT
+        if volume < min_volume:
+            raise InsufficientVolumeError(
+                f"{symbol} 24-hour quote volume ${volume:,.2f} is below "
+                f"{config.MIN_VOLUME_MARKET_CAP_PCT:.0%} of market cap "
+                f"(${min_volume:,.2f} required, market cap ${market_cap:,.2f})."
             )
         logger.debug(
-            "Volume check %s — quoteVolume=$%.2f (min=$%.2f) ✓",
+            "Volume check %s — quoteVolume=$%.2f (min=$%.2f, %.0f%% of market cap $%.2f) ✓",
             symbol,
             volume,
-            config.MIN_VOLUME_USD,
+            min_volume,
+            config.MIN_VOLUME_MARKET_CAP_PCT * 100,
+            market_cap,
+        )
+
+    def _check_spread(self, symbol: str) -> None:
+        """
+        Raise :class:`WideBidAskSpreadError` if the bid-ask spread for
+        *symbol* is at or above ``config.MAX_BID_ASK_SPREAD_PCT``.
+
+        The spread is computed as ``(ask - bid) / ask`` and compared against
+        the configured threshold.  A spread at or above the threshold
+        indicates insufficient book depth or excessive market-maker costs.
+
+        Parameters
+        ----------
+        symbol :
+            Trading pair, e.g. ``"BTC/USD"``.
+
+        Raises
+        ------
+        WideBidAskSpreadError
+            If the bid-ask spread is at or above
+            ``config.MAX_BID_ASK_SPREAD_PCT``, or if bid/ask prices cannot
+            be retrieved from the exchange.
+        """
+        ticker = self.exchange.fetch_ticker(symbol)
+        bid = ticker.get("bid")
+        ask = ticker.get("ask")
+        if not bid or not ask:
+            raise WideBidAskSpreadError(
+                f"Unable to retrieve bid/ask prices for {symbol}. "
+                "Cannot verify bid-ask spread."
+            )
+        bid = float(bid)
+        ask = float(ask)
+        spread_pct = (ask - bid) / ask
+        if spread_pct >= config.MAX_BID_ASK_SPREAD_PCT:
+            raise WideBidAskSpreadError(
+                f"{symbol} bid-ask spread {spread_pct:.4%} is at or above the "
+                f"maximum allowed {config.MAX_BID_ASK_SPREAD_PCT:.1%} "
+                f"(bid=${bid:,.6f}, ask=${ask:,.6f})."
+            )
+        logger.debug(
+            "Spread check %s — spread=%.4f%% (max=%.1f%%) ✓",
+            symbol,
+            spread_pct * 100,
+            config.MAX_BID_ASK_SPREAD_PCT * 100,
         )
 
     # ------------------------------------------------------------------
@@ -281,14 +349,18 @@ class CryptoTrader:
         OrderSizeError
             If *amount_usd* is outside the configured range.
         InsufficientVolumeError
-            If the 24-hour quote volume for *symbol* is below
-            ``config.MIN_VOLUME_USD``.
+            If the 24-hour quote volume for *symbol* is below 4 % of its
+            market capitalisation.
+        WideBidAskSpreadError
+            If the bid-ask spread for *symbol* is at or above
+            ``config.MAX_BID_ASK_SPREAD_PCT``.
         ValueError
             If *symbol* is not a USD-quoted pair.
         """
         self._validate_usd_pair(symbol)
         self._validate_buy_amount(amount_usd)
         self._check_volume(symbol)
+        self._check_spread(symbol)
 
         price = self._get_price(symbol)
         quantity = amount_usd / price
@@ -452,9 +524,10 @@ class CryptoTrader:
         ``bundle_name → [symbol, ...]``.  Each symbol receives its own
         independent order for *amount_usd_per_symbol* USD.
 
-        Symbols whose orders fail due to insufficient volume or an invalid
-        order size are **skipped** with a warning rather than aborting the
-        entire bundle, so a single illiquid asset cannot block the rest.
+        Symbols whose orders fail due to insufficient volume, a wide bid-ask
+        spread, or an invalid order size are **skipped** with a warning rather
+        than aborting the entire bundle, so a single illiquid asset cannot
+        block the rest.
         All other exceptions are re-raised immediately.
 
         Works in both **paper-trading** and **live-trading** modes — the
@@ -507,7 +580,7 @@ class CryptoTrader:
                     order["amount"],
                     order["price"],
                 )
-            except (InsufficientVolumeError, OrderSizeError) as exc:
+            except (InsufficientVolumeError, WideBidAskSpreadError, OrderSizeError) as exc:
                 logger.warning(
                     "buy_bundle '%s' — skipping %s: %s",
                     bundle_name,
@@ -789,7 +862,8 @@ class CryptoTrader:
         4. RSI is **below** ``config.RSI_OVERSOLD`` (default 30) →
            the asset is oversold, offering a potential entry.
 
-        The minimum 24-hour volume check must also pass.
+        The minimum 24-hour volume check and the bid-ask spread check must
+        also pass.
 
         Parameters
         ----------
@@ -811,17 +885,25 @@ class CryptoTrader:
             logger.warning("should_buy %s — volume check failed: %s", symbol, exc)
             volume_ok = False
 
-        signal = price_above_vwap and price_above_poc and algo_signal and rsi_oversold and volume_ok
+        try:
+            self._check_spread(symbol)
+            spread_ok = True
+        except WideBidAskSpreadError as exc:
+            logger.warning("should_buy %s — spread check failed: %s", symbol, exc)
+            spread_ok = False
+
+        signal = price_above_vwap and price_above_poc and algo_signal and rsi_oversold and volume_ok and spread_ok
 
         logger.info(
             "should_buy %s — price_above_vwap=%s price_above_poc=%s "
-            "algo_signal=%s rsi_oversold=%s volume_ok=%s → signal=%s",
+            "algo_signal=%s rsi_oversold=%s volume_ok=%s spread_ok=%s → signal=%s",
             symbol,
             price_above_vwap,
             price_above_poc,
             algo_signal,
             rsi_oversold,
             volume_ok,
+            spread_ok,
             signal,
         )
         return signal

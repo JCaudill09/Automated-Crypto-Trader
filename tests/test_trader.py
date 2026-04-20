@@ -9,7 +9,48 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import config
-from trader import CryptoTrader, OrderSizeError, InsufficientVolumeError
+from trader import CryptoTrader, OrderSizeError, InsufficientVolumeError, WideBidAskSpreadError
+
+
+# ---------------------------------------------------------------------------
+# Test constants
+# ---------------------------------------------------------------------------
+
+# Market-cap value used in ticker mocks.  4 % of this value is the minimum
+# acceptable 24-hour quote volume under the new liquidity rule.
+_TEST_MARKET_CAP = 1_000_000.0
+
+
+def _min_volume(market_cap: float = _TEST_MARKET_CAP) -> float:
+    """Return the minimum required 24-hour volume for *market_cap*."""
+    return market_cap * config.MIN_VOLUME_MARKET_CAP_PCT
+
+
+def _make_ticker(
+    price: float,
+    *,
+    bid: float | None = None,
+    quote_volume: float | None = None,
+    market_cap: float = _TEST_MARKET_CAP,
+) -> dict:
+    """Build a minimal ticker dict suitable for mocking ``fetch_ticker``.
+
+    Defaults produce a ticker that passes both the volume and spread checks:
+    - ``quoteVolume`` is 10× the required minimum (10 % of market cap).
+    - ``bid`` is 0.1 % below ``ask``, giving a 0.1 % spread (< 0.5 % max).
+    """
+    ask = price
+    if bid is None:
+        bid = price * (1.0 - 0.001)  # 0.1 % spread — passes spread check
+    if quote_volume is None:
+        quote_volume = market_cap * config.MIN_VOLUME_MARKET_CAP_PCT * 10
+    return {
+        "ask": ask,
+        "bid": bid,
+        "last": price,
+        "quoteVolume": quote_volume,
+        "info": {"market_cap": market_cap},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -34,12 +75,8 @@ def _make_trader(**kwargs) -> CryptoTrader:
 
 
 def _set_price(trader: CryptoTrader, symbol: str, price: float) -> None:
-    """Configure the mocked exchange to return *price* and sufficient volume for *symbol*."""
-    trader.exchange.fetch_ticker.return_value = {
-        "ask": price,
-        "last": price,
-        "quoteVolume": config.MIN_VOLUME_USD * 10,
-    }
+    """Configure the mocked exchange to return *price* and sufficient volume/spread for *symbol*."""
+    trader.exchange.fetch_ticker.return_value = _make_ticker(price)
 
 
 def _make_ohlcv(closes: list, volume: float = 1000.0) -> list:
@@ -83,8 +120,11 @@ class TestConfig(unittest.TestCase):
     def test_rsi_overbought(self):
         self.assertEqual(config.RSI_OVERBOUGHT, 70)
 
-    def test_min_volume_usd_positive(self):
-        self.assertGreater(config.MIN_VOLUME_USD, 0)
+    def test_min_volume_market_cap_pct_positive(self):
+        self.assertGreater(config.MIN_VOLUME_MARKET_CAP_PCT, 0)
+
+    def test_max_bid_ask_spread_pct_positive(self):
+        self.assertGreater(config.MAX_BID_ASK_SPREAD_PCT, 0)
 
     def test_simple_algo_short_period(self):
         self.assertEqual(config.SIMPLE_ALGO_SHORT_PERIOD, 9)
@@ -583,7 +623,7 @@ class TestShouldBuy(unittest.TestCase):
 
     def _set_indicators(self, trader, price, vwap, rsi,
                         volume_profile_poc=None, simple_algo_signal=True,
-                        quote_volume=None):
+                        quote_volume=None, bid=None):
         """Patch get_indicators to return controlled values and set up a ticker mock."""
         poc = volume_profile_poc if volume_profile_poc is not None else price - 10.0
         trader.get_indicators = MagicMock(
@@ -595,12 +635,9 @@ class TestShouldBuy(unittest.TestCase):
                 "simple_algo_signal": simple_algo_signal,
             }
         )
-        vol = quote_volume if quote_volume is not None else config.MIN_VOLUME_USD * 10
-        trader.exchange.fetch_ticker.return_value = {
-            "ask": price,
-            "last": price,
-            "quoteVolume": vol,
-        }
+        trader.exchange.fetch_ticker.return_value = _make_ticker(
+            price, bid=bid, quote_volume=quote_volume
+        )
 
     def test_buy_signal_when_all_conditions_met(self):
         trader = _make_trader()
@@ -712,11 +749,7 @@ class TestCheckExit(unittest.TestCase):
 
 def _set_volume(trader: CryptoTrader, symbol: str, quote_volume: float) -> None:
     """Configure the mocked exchange to return *quote_volume* for *symbol*."""
-    trader.exchange.fetch_ticker.return_value = {
-        "ask": 1.0,
-        "last": 1.0,
-        "quoteVolume": quote_volume,
-    }
+    trader.exchange.fetch_ticker.return_value = _make_ticker(1.0, quote_volume=quote_volume)
 
 
 class TestCheckVolume(unittest.TestCase):
@@ -726,15 +759,15 @@ class TestCheckVolume(unittest.TestCase):
         self.trader = _make_trader()
 
     def test_passes_when_volume_above_minimum(self):
-        _set_volume(self.trader, self.SYMBOL, config.MIN_VOLUME_USD + 1.0)
+        _set_volume(self.trader, self.SYMBOL, _min_volume() + 1.0)
         self.trader._check_volume(self.SYMBOL)  # should not raise
 
     def test_passes_when_volume_equals_minimum(self):
-        _set_volume(self.trader, self.SYMBOL, config.MIN_VOLUME_USD)
+        _set_volume(self.trader, self.SYMBOL, _min_volume())
         self.trader._check_volume(self.SYMBOL)  # should not raise
 
     def test_raises_when_volume_below_minimum(self):
-        _set_volume(self.trader, self.SYMBOL, config.MIN_VOLUME_USD - 1.0)
+        _set_volume(self.trader, self.SYMBOL, _min_volume() - 1.0)
         with self.assertRaises(InsufficientVolumeError):
             self.trader._check_volume(self.SYMBOL)
 
@@ -746,19 +779,37 @@ class TestCheckVolume(unittest.TestCase):
     def test_raises_when_volume_is_none(self):
         self.trader.exchange.fetch_ticker.return_value = {
             "ask": 1.0,
+            "bid": 0.999,
             "last": 1.0,
             "quoteVolume": None,
+            "info": {"market_cap": _TEST_MARKET_CAP},
         }
         with self.assertRaises(InsufficientVolumeError):
             self.trader._check_volume(self.SYMBOL)
 
     def test_raises_when_quoteVolume_key_missing(self):
-        self.trader.exchange.fetch_ticker.return_value = {"ask": 1.0, "last": 1.0}
+        self.trader.exchange.fetch_ticker.return_value = {
+            "ask": 1.0,
+            "bid": 0.999,
+            "last": 1.0,
+            "info": {"market_cap": _TEST_MARKET_CAP},
+        }
+        with self.assertRaises(InsufficientVolumeError):
+            self.trader._check_volume(self.SYMBOL)
+
+    def test_raises_when_market_cap_missing(self):
+        self.trader.exchange.fetch_ticker.return_value = {
+            "ask": 1.0,
+            "bid": 0.999,
+            "last": 1.0,
+            "quoteVolume": _min_volume() * 10,
+            "info": {},
+        }
         with self.assertRaises(InsufficientVolumeError):
             self.trader._check_volume(self.SYMBOL)
 
     def test_error_message_contains_symbol_and_amounts(self):
-        low_vol = config.MIN_VOLUME_USD / 2
+        low_vol = _min_volume() / 2
         _set_volume(self.trader, self.SYMBOL, low_vol)
         with self.assertRaises(InsufficientVolumeError) as ctx:
             self.trader._check_volume(self.SYMBOL)
@@ -773,23 +824,19 @@ class TestVolumeIntegration(unittest.TestCase):
 
     def _make_trader_with_volume(self, quote_volume: float) -> CryptoTrader:
         trader = _make_trader()
-        trader.exchange.fetch_ticker.return_value = {
-            "ask": 50_000.0,
-            "last": 50_000.0,
-            "quoteVolume": quote_volume,
-        }
+        trader.exchange.fetch_ticker.return_value = _make_ticker(50_000.0, quote_volume=quote_volume)
         return trader
 
     # --- buy() ---
 
     def test_buy_raises_when_volume_insufficient(self):
-        trader = self._make_trader_with_volume(config.MIN_VOLUME_USD - 1.0)
+        trader = self._make_trader_with_volume(_min_volume() - 1.0)
         with self.assertRaises(InsufficientVolumeError):
             trader.buy(self.SYMBOL, 40.0)
         trader.exchange.create_market_buy_order.assert_not_called()
 
     def test_buy_succeeds_when_volume_sufficient(self):
-        trader = self._make_trader_with_volume(config.MIN_VOLUME_USD + 1.0)
+        trader = self._make_trader_with_volume(_min_volume() + 1.0)
         order = trader.buy(self.SYMBOL, 40.0)
         self.assertEqual(order["side"], "buy")
 
@@ -808,23 +855,103 @@ class TestVolumeIntegration(unittest.TestCase):
         )
 
     def test_should_buy_false_when_volume_insufficient(self):
-        trader = self._make_trader_with_volume(config.MIN_VOLUME_USD - 1.0)
+        trader = self._make_trader_with_volume(_min_volume() - 1.0)
         self._bullish_indicators(trader)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
     def test_should_buy_true_when_volume_sufficient_and_signals_fire(self):
-        trader = self._make_trader_with_volume(config.MIN_VOLUME_USD + 1.0)
+        trader = self._make_trader_with_volume(_min_volume() + 1.0)
         self._bullish_indicators(trader)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
     def test_should_buy_false_when_volume_zero(self):
         trader = _make_trader()
-        trader.exchange.fetch_ticker.return_value = {
-            "ask": 110.0,
-            "last": 110.0,
-            "quoteVolume": 0.0,
-        }
+        trader.exchange.fetch_ticker.return_value = _make_ticker(110.0, quote_volume=0.0)
         self._bullish_indicators(trader)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+
+# ---------------------------------------------------------------------------
+# Bid-ask spread check tests
+# ---------------------------------------------------------------------------
+
+class TestCheckSpread(unittest.TestCase):
+    SYMBOL = "BTC/USD"
+    PRICE = 1_000.0
+
+    def setUp(self):
+        self.trader = _make_trader()
+
+    def _set_spread(self, bid: float) -> None:
+        self.trader.exchange.fetch_ticker.return_value = _make_ticker(self.PRICE, bid=bid)
+
+    def test_passes_when_spread_below_maximum(self):
+        # 0.1 % spread — well below 0.5 % max
+        self._set_spread(self.PRICE * (1.0 - 0.001))
+        self.trader._check_spread(self.SYMBOL)  # should not raise
+
+    def test_passes_when_spread_just_below_maximum(self):
+        # spread just under 0.5 %
+        bid = self.PRICE * (1.0 - (config.MAX_BID_ASK_SPREAD_PCT - 1e-6))
+        self._set_spread(bid)
+        self.trader._check_spread(self.SYMBOL)  # should not raise
+
+    def test_raises_when_spread_at_maximum(self):
+        # spread exactly at 0.5 % → should raise (>= threshold)
+        bid = self.PRICE * (1.0 - config.MAX_BID_ASK_SPREAD_PCT)
+        self._set_spread(bid)
+        with self.assertRaises(WideBidAskSpreadError):
+            self.trader._check_spread(self.SYMBOL)
+
+    def test_raises_when_spread_above_maximum(self):
+        # 1 % spread — above 0.5 % max
+        self._set_spread(self.PRICE * (1.0 - 0.01))
+        with self.assertRaises(WideBidAskSpreadError):
+            self.trader._check_spread(self.SYMBOL)
+
+    def test_raises_when_bid_is_none(self):
+        self.trader.exchange.fetch_ticker.return_value = _make_ticker(self.PRICE, bid=None)
+        # Override bid with None explicitly
+        self.trader.exchange.fetch_ticker.return_value["bid"] = None
+        with self.assertRaises(WideBidAskSpreadError):
+            self.trader._check_spread(self.SYMBOL)
+
+    def test_raises_when_bid_key_missing(self):
+        ticker = _make_ticker(self.PRICE)
+        del ticker["bid"]
+        self.trader.exchange.fetch_ticker.return_value = ticker
+        with self.assertRaises(WideBidAskSpreadError):
+            self.trader._check_spread(self.SYMBOL)
+
+    def test_error_message_contains_symbol(self):
+        self._set_spread(self.PRICE * (1.0 - 0.01))  # wide spread
+        with self.assertRaises(WideBidAskSpreadError) as ctx:
+            self.trader._check_spread(self.SYMBOL)
+        self.assertIn(self.SYMBOL, str(ctx.exception))
+
+    def test_buy_raises_when_spread_too_wide(self):
+        """buy() should raise WideBidAskSpreadError when spread ≥ MAX_BID_ASK_SPREAD_PCT."""
+        self._set_spread(self.PRICE * (1.0 - 0.01))
+        with self.assertRaises(WideBidAskSpreadError):
+            self.trader.buy(self.SYMBOL, 40.0)
+        self.trader.exchange.create_market_buy_order.assert_not_called()
+
+    def test_should_buy_false_when_spread_too_wide(self):
+        """should_buy() returns False when spread exceeds maximum."""
+        trader = _make_trader()
+        price = 110.0
+        trader.exchange.fetch_ticker.return_value = _make_ticker(
+            price, bid=price * (1.0 - 0.01)  # 1 % spread
+        )
+        trader.get_indicators = MagicMock(
+            return_value={
+                "price": price,
+                "vwap": 100.0,
+                "volume_profile_poc": 100.0,
+                "simple_algo_signal": True,
+                "rsi": 25.0,
+            }
+        )
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
 
@@ -910,11 +1037,7 @@ class TestGetUsdBalance(unittest.TestCase):
 
 def _set_ticker_and_balance(trader: CryptoTrader, price: float, usd_free: float) -> None:
     """Configure mocked exchange with a price ticker and a USD balance."""
-    trader.exchange.fetch_ticker.return_value = {
-        "ask": price,
-        "last": price,
-        "quoteVolume": config.MIN_VOLUME_USD * 10,
-    }
+    trader.exchange.fetch_ticker.return_value = _make_ticker(price)
     trader.exchange.fetch_balance.return_value = {
         "USD": {"free": usd_free, "used": 0.0, "total": usd_free}
     }
@@ -990,12 +1113,8 @@ class TestBuyMaxOrders(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 def _set_ticker_for_bundle(trader: CryptoTrader, price: float) -> None:
-    """Configure the mocked exchange to return *price* and sufficient volume for any symbol."""
-    trader.exchange.fetch_ticker.return_value = {
-        "ask": price,
-        "last": price,
-        "quoteVolume": config.MIN_VOLUME_USD * 10,
-    }
+    """Configure the mocked exchange to return *price* and sufficient volume/spread for any symbol."""
+    trader.exchange.fetch_ticker.return_value = _make_ticker(price)
 
 
 class TestBuyBundle(unittest.TestCase):
@@ -1098,8 +1217,8 @@ class TestBuyBundle(unittest.TestCase):
         good_vol_sym = symbols[1]
 
         def _ticker(symbol):
-            vol = 0.0 if symbol == low_vol_sym else config.MIN_VOLUME_USD * 10
-            return {"ask": self.PRICE, "last": self.PRICE, "quoteVolume": vol}
+            vol = 0.0 if symbol == low_vol_sym else _min_volume() * 10
+            return _make_ticker(self.PRICE, quote_volume=vol)
 
         self.trader.exchange.fetch_ticker.side_effect = _ticker
 
@@ -1117,11 +1236,9 @@ class TestBuyBundle(unittest.TestCase):
 
     def test_all_symbols_skipped_returns_empty_dict(self):
         """If every symbol in the bundle is skipped, an empty dict is returned."""
-        self.trader.exchange.fetch_ticker.return_value = {
-            "ask": self.PRICE,
-            "last": self.PRICE,
-            "quoteVolume": 0.0,  # below minimum for every symbol
-        }
+        self.trader.exchange.fetch_ticker.return_value = _make_ticker(
+            self.PRICE, quote_volume=0.0  # below minimum for every symbol
+        )
         orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
         self.assertEqual(orders, {})
 
@@ -1355,11 +1472,7 @@ class TestCheckExitOrders(unittest.TestCase):
         self.entry = 50_000.0
 
     def _set_price(self, price: float) -> None:
-        self.trader.exchange.fetch_ticker.return_value = {
-            "ask": price,
-            "last": price,
-            "quoteVolume": config.MIN_VOLUME_USD * 10,
-        }
+        self.trader.exchange.fetch_ticker.return_value = _make_ticker(price)
 
     # -- Fallback (None order IDs) -------------------------------------------
 
