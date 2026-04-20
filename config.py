@@ -39,17 +39,10 @@ VOLUME_PROFILE_BINS = 50  # Number of equal-width price bins for the volume prof
 # How often (in seconds) to refresh the list of tradeable pairs from the exchange
 SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
 
-# Minimum 24-hour trading volume as a fraction of the asset's market
-# capitalisation required before a buy order is placed or a buy signal is
-# issued.  The exchange must supply a market-cap figure (via the ticker
-# ``info`` dict).  Markets whose volume/market-cap ratio is below this
-# threshold are considered too illiquid to reliably fill or exit orders.
-MIN_VOLUME_MARKET_CAP_PCT = 0.04  # 4% of market cap
-
-# Absolute minimum 24-hour quote-currency volume (USD) used as a fallback
-# when the exchange does not supply a market-cap figure.  Any symbol whose
-# 24-hour volume is below this threshold is still rejected as too illiquid.
-MIN_VOLUME_USD = 50_000.0  # $50,000
+# Minimum 24-hour quote-currency volume (USD) required before a buy order is
+# placed or a buy signal is issued.  Any symbol whose 24-hour volume is below
+# this threshold is rejected as too illiquid.
+MIN_VOLUME_USD = 15_000.0  # $15,000
 
 # Maximum allowed bid-ask spread expressed as a fraction of the ask price.
 # A spread above this threshold indicates insufficient liquidity or a
