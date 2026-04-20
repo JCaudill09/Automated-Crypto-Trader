@@ -42,6 +42,11 @@ SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
 # threshold are considered too illiquid to reliably fill or exit orders.
 MIN_VOLUME_MARKET_CAP_PCT = 0.04  # 4% of market cap
 
+# Absolute minimum 24-hour quote-currency volume (USD) used as a fallback
+# when the exchange does not supply a market-cap figure.  Any symbol whose
+# 24-hour volume is below this threshold is still rejected as too illiquid.
+MIN_VOLUME_USD = 500_000.0  # $500 000
+
 # Maximum allowed bid-ask spread expressed as a fraction of the ask price.
 # A spread above this threshold indicates insufficient liquidity or a
 # market-maker-dominated book, and no buy order or buy signal is issued.

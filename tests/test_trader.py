@@ -797,12 +797,22 @@ class TestCheckVolume(unittest.TestCase):
         with self.assertRaises(InsufficientVolumeError):
             self.trader._check_volume(self.SYMBOL)
 
-    def test_raises_when_market_cap_missing(self):
+    def test_passes_when_market_cap_missing_but_volume_above_fallback(self):
         self.trader.exchange.fetch_ticker.return_value = {
             "ask": 1.0,
             "bid": 0.999,
             "last": 1.0,
-            "quoteVolume": _min_volume() * 10,
+            "quoteVolume": config.MIN_VOLUME_USD + 1.0,
+            "info": {},
+        }
+        self.trader._check_volume(self.SYMBOL)  # should not raise
+
+    def test_raises_when_market_cap_missing_and_volume_below_fallback(self):
+        self.trader.exchange.fetch_ticker.return_value = {
+            "ask": 1.0,
+            "bid": 0.999,
+            "last": 1.0,
+            "quoteVolume": config.MIN_VOLUME_USD - 1.0,
             "info": {},
         }
         with self.assertRaises(InsufficientVolumeError):
