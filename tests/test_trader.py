@@ -37,7 +37,7 @@ def _make_ticker(
 
     Defaults produce a ticker that passes both the volume and spread checks:
     - ``quoteVolume`` is 10× the required minimum (10 % of market cap).
-    - ``bid`` is 0.1 % below ``ask``, giving a 0.1 % spread (< 0.5 % max).
+    - ``bid`` is 0.1 % below ``ask``, giving a 0.1 % spread (< 1 % max).
     """
     ask = price
     if bid is None:
@@ -1013,26 +1013,26 @@ class TestCheckSpread(unittest.TestCase):
         self.trader.exchange.fetch_ticker.return_value = _make_ticker(self.PRICE, bid=bid)
 
     def test_passes_when_spread_below_maximum(self):
-        # 0.1 % spread — well below 0.5 % max
+        # 0.1 % spread — well below 1 % max
         self._set_spread(self.PRICE * (1.0 - 0.001))
         self.trader._check_spread(self.SYMBOL)  # should not raise
 
     def test_passes_when_spread_just_below_maximum(self):
-        # spread just under 0.5 %
+        # spread just under 1 %
         bid = self.PRICE * (1.0 - (config.MAX_BID_ASK_SPREAD_PCT - 1e-6))
         self._set_spread(bid)
         self.trader._check_spread(self.SYMBOL)  # should not raise
 
     def test_raises_when_spread_at_maximum(self):
-        # spread exactly at 0.5 % → should raise (>= threshold)
+        # spread exactly at 1 % → should raise (>= threshold)
         bid = self.PRICE * (1.0 - config.MAX_BID_ASK_SPREAD_PCT)
         self._set_spread(bid)
         with self.assertRaises(WideBidAskSpreadError):
             self.trader._check_spread(self.SYMBOL)
 
     def test_raises_when_spread_above_maximum(self):
-        # 1 % spread — above 0.5 % max
-        self._set_spread(self.PRICE * (1.0 - 0.01))
+        # 1.5 % spread — above 1 % max
+        self._set_spread(self.PRICE * (1.0 - 0.015))
         with self.assertRaises(WideBidAskSpreadError):
             self.trader._check_spread(self.SYMBOL)
 
@@ -1051,14 +1051,14 @@ class TestCheckSpread(unittest.TestCase):
             self.trader._check_spread(self.SYMBOL)
 
     def test_error_message_contains_symbol(self):
-        self._set_spread(self.PRICE * (1.0 - 0.01))  # wide spread
+        self._set_spread(self.PRICE * (1.0 - 0.015))  # wide spread
         with self.assertRaises(WideBidAskSpreadError) as ctx:
             self.trader._check_spread(self.SYMBOL)
         self.assertIn(self.SYMBOL, str(ctx.exception))
 
     def test_buy_raises_when_spread_too_wide(self):
         """buy() should raise WideBidAskSpreadError when spread ≥ MAX_BID_ASK_SPREAD_PCT."""
-        self._set_spread(self.PRICE * (1.0 - 0.01))
+        self._set_spread(self.PRICE * (1.0 - 0.015))
         with self.assertRaises(WideBidAskSpreadError):
             self.trader.buy(self.SYMBOL, 40.0)
         self.trader.exchange.create_market_buy_order.assert_not_called()
@@ -1068,7 +1068,7 @@ class TestCheckSpread(unittest.TestCase):
         trader = _make_trader()
         price = 110.0
         trader.exchange.fetch_ticker.return_value = _make_ticker(
-            price, bid=price * (1.0 - 0.01)  # 1 % spread
+            price, bid=price * (1.0 - 0.015)  # 1.5 % spread
         )
         trader.get_indicators = MagicMock(
             return_value={

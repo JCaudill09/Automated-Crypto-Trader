@@ -27,7 +27,7 @@ Trade signals
            (default 4 %) of the asset's market capitalisation, ensuring
            there is sufficient liquidity to fill and exit positions.
 - Spread  : buy orders and buy signals are only issued when the bid-ask
-           spread is below ``config.MAX_BID_ASK_SPREAD_PCT`` (default 0.5 %),
+           spread is below ``config.MAX_BID_ASK_SPREAD_PCT`` (default 1 %),
            ensuring the market is tight enough for reliable order fills.
 
 Set PAPER_TRADING = True in config.py (the default) to simulate orders

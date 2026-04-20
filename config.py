@@ -54,7 +54,7 @@ MIN_VOLUME_USD = 50_000.0  # $50,000
 # Maximum allowed bid-ask spread expressed as a fraction of the ask price.
 # A spread above this threshold indicates insufficient liquidity or a
 # market-maker-dominated book, and no buy order or buy signal is issued.
-MAX_BID_ASK_SPREAD_PCT = 0.005  # 0.5 %
+MAX_BID_ASK_SPREAD_PCT = 0.01  # 1 %
 
 # ---------------------------------------------------------------------------
 # Order bundles
