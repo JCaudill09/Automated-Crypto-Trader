@@ -10,10 +10,10 @@ Order constraints
 
 Trade signals
 -------------
-- Filter (Trend) : price must be **above** the VWAP → confirmed intraday
-                   uptrend before a buy is considered.
+- Filter (Trend) : EMA 50 must be **above** the EMA 200 → confirmed uptrend
+                   (golden cross) before a buy is considered.
 - Trigger (Momentum) : RSI must be **below** ``config.RSI_OVERSOLD``
-                        (default 40) → asset is oversold / cheap.
+                        (default 50) → momentum has not yet turned overbought.
   Both conditions together (plus the 24-hour quote-volume and bid-ask
   spread checks) must pass for a buy signal to fire.
 - Execution (Volatility) : stop-loss is placed at
@@ -798,13 +798,12 @@ class CryptoTrader:
     @staticmethod
     def _compute_simple_algo_signal(closes: list) -> bool:
         """
-        Return a bullish momentum signal using a short/long EMA crossover.
+        Return a bullish trend signal using an EMA 50 / EMA 200 golden cross.
 
-        This acts as an approximation of algorithmic entry signals: the signal
-        is ``True`` (bullish) when the short-term EMA
-        (``config.SIMPLE_ALGO_SHORT_PERIOD``, default 9) is above the
-        long-term EMA (``config.SIMPLE_ALGO_LONG_PERIOD``, default 21),
-        indicating positive price momentum.
+        The signal is ``True`` (bullish) when the EMA 50
+        (``config.SIMPLE_ALGO_SHORT_PERIOD``) is above the EMA 200
+        (``config.SIMPLE_ALGO_LONG_PERIOD``), indicating that the market is in
+        a confirmed uptrend.
 
         Parameters
         ----------
@@ -814,7 +813,7 @@ class CryptoTrader:
         Returns
         -------
         bool
-            ``True`` when the short-term EMA is above the long-term EMA.
+            ``True`` when EMA 50 is above EMA 200 (golden cross).
         """
         if len(closes) < config.SIMPLE_ALGO_LONG_PERIOD:
             return False
@@ -925,10 +924,10 @@ class CryptoTrader:
 
         Buy conditions (both must be met):
 
-        1. Current price is **above** the VWAP → confirmed intraday uptrend
+        1. EMA 50 is **above** the EMA 200 → confirmed uptrend / golden cross
            (the trend filter).
-        2. RSI is **below** ``config.RSI_OVERSOLD`` (default 40) →
-           the asset is oversold / cheap (the momentum trigger).
+        2. RSI is **below** ``config.RSI_OVERSOLD`` (default 50) →
+           momentum has not yet turned overbought (the momentum trigger).
 
         The minimum 24-hour volume check and the bid-ask spread check must
         also pass.
@@ -941,8 +940,8 @@ class CryptoTrader:
             Candle interval accepted by the exchange (default ``"1h"``).
         """
         indicators = self.get_indicators(symbol, timeframe)
-        price_above_vwap = indicators["price"] > indicators["vwap"]
-        rsi_oversold = indicators["rsi"] < config.RSI_OVERSOLD
+        ema_golden_cross = indicators["simple_algo_signal"]
+        rsi_below_threshold = indicators["rsi"] < config.RSI_OVERSOLD
 
         try:
             self._check_volume(symbol)
@@ -958,14 +957,14 @@ class CryptoTrader:
             logger.warning("should_buy %s — spread check failed: %s", symbol, exc)
             spread_ok = False
 
-        signal = price_above_vwap and rsi_oversold and volume_ok and spread_ok
+        signal = ema_golden_cross and rsi_below_threshold and volume_ok and spread_ok
 
         logger.info(
-            "should_buy %s — price_above_vwap=%s rsi_oversold=%s "
+            "should_buy %s — ema_golden_cross=%s rsi_below_threshold=%s "
             "volume_ok=%s spread_ok=%s → signal=%s",
             symbol,
-            price_above_vwap,
-            rsi_oversold,
+            ema_golden_cross,
+            rsi_below_threshold,
             volume_ok,
             spread_ok,
             signal,
