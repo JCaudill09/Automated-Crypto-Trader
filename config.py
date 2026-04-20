@@ -40,7 +40,7 @@ SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
 # issued.  The exchange must supply a market-cap figure (via the ticker
 # ``info`` dict).  Markets whose volume/market-cap ratio is below this
 # threshold are considered too illiquid to reliably fill or exit orders.
-MIN_VOLUME_MARKET_CAP_PCT = 0.04  # 4 % of market cap
+MIN_VOLUME_MARKET_CAP_PCT = 0.04  # 4% of market cap
 
 # Maximum allowed bid-ask spread expressed as a fraction of the ask price.
 # A spread above this threshold indicates insufficient liquidity or a

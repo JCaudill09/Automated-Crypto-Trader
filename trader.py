@@ -234,11 +234,11 @@ class CryptoTrader:
         if volume < min_volume:
             raise InsufficientVolumeError(
                 f"{symbol} 24-hour quote volume ${volume:,.2f} is below "
-                f"{config.MIN_VOLUME_MARKET_CAP_PCT:.0%} of market cap "
+                f"{config.MIN_VOLUME_MARKET_CAP_PCT:.1%} of market cap "
                 f"(${min_volume:,.2f} required, market cap ${market_cap:,.2f})."
             )
         logger.debug(
-            "Volume check %s — quoteVolume=$%.2f (min=$%.2f, %.0f%% of market cap $%.2f) ✓",
+            "Volume check %s — quoteVolume=$%.2f (min=$%.2f, %.1f%% of market cap $%.2f) ✓",
             symbol,
             volume,
             min_volume,
@@ -281,7 +281,7 @@ class CryptoTrader:
         if spread_pct >= config.MAX_BID_ASK_SPREAD_PCT:
             raise WideBidAskSpreadError(
                 f"{symbol} bid-ask spread {spread_pct:.4%} is at or above the "
-                f"maximum allowed {config.MAX_BID_ASK_SPREAD_PCT:.1%} "
+                f"maximum allowed {config.MAX_BID_ASK_SPREAD_PCT:.2%} "
                 f"(bid=${bid:,.6f}, ask=${ask:,.6f})."
             )
         logger.debug(
