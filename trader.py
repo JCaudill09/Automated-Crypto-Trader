@@ -192,14 +192,21 @@ class CryptoTrader:
     def _check_volume(self, symbol: str) -> None:
         """
         Raise :class:`InsufficientVolumeError` if the 24-hour quote-currency
-        volume for *symbol* is below ``config.MIN_VOLUME_MARKET_CAP_PCT`` of
-        the asset's market capitalisation.
+        volume for *symbol* is too low.
 
         The ``quoteVolume`` field from ``fetch_ticker`` represents the total
         value traded over the last 24 hours expressed in the quote currency
-        (e.g. USD for ``BTC/USD``).  The market capitalisation is read from
-        the exchange-specific ``info`` dict returned alongside the standard
-        ticker fields (key ``"market_cap"``).
+        (e.g. USD for ``BTC/USD``).
+
+        Primary check (when market-cap data is available):
+            Volume must be at least ``config.MIN_VOLUME_MARKET_CAP_PCT`` of
+            the asset's market capitalisation.  The market capitalisation is
+            read from the exchange-specific ``info`` dict (key
+            ``"market_cap"``).
+
+        Fallback check (when market-cap data is unavailable):
+            Volume must be at least the absolute ``config.MIN_VOLUME_USD``
+            threshold.  A warning is logged so the missing data is visible.
 
         Parameters
         ----------
@@ -209,9 +216,8 @@ class CryptoTrader:
         Raises
         ------
         InsufficientVolumeError
-            If the reported 24-hour quote volume is below
-            ``config.MIN_VOLUME_MARKET_CAP_PCT`` of market cap, or if the
-            exchange does not return a volume or market-cap figure.
+            If the reported 24-hour quote volume is below the applicable
+            minimum, or if the exchange does not return a volume figure.
         """
         ticker = self.exchange.fetch_ticker(symbol)
         volume = ticker.get("quoteVolume")
@@ -224,10 +230,26 @@ class CryptoTrader:
 
         market_cap = ticker.get("info", {}).get("market_cap")
         if not market_cap:
-            raise InsufficientVolumeError(
-                f"Unable to retrieve market capitalisation for {symbol}. "
-                "Cannot verify sufficient liquidity."
+            logger.warning(
+                "Volume check %s — market cap unavailable; "
+                "falling back to absolute minimum $%.2f.",
+                symbol,
+                config.MIN_VOLUME_USD,
             )
+            if volume < config.MIN_VOLUME_USD:
+                raise InsufficientVolumeError(
+                    f"{symbol} 24-hour quote volume ${volume:,.2f} is below "
+                    f"the absolute minimum ${config.MIN_VOLUME_USD:,.2f} "
+                    "(market cap data unavailable)."
+                )
+            logger.debug(
+                "Volume check %s — quoteVolume=$%.2f (fallback min=$%.2f) ✓",
+                symbol,
+                volume,
+                config.MIN_VOLUME_USD,
+            )
+            return
+
         market_cap = float(market_cap)
 
         min_volume = market_cap * config.MIN_VOLUME_MARKET_CAP_PCT
