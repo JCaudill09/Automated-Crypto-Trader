@@ -109,16 +109,16 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.MIN_BUY_ORDER, 30.0)
 
     def test_max_buy_order_is_50(self):
-        self.assertEqual(config.MAX_BUY_ORDER, 50.0)
+        self.assertEqual(config.MAX_BUY_ORDER, 78.0)
 
     def test_min_less_than_max(self):
         self.assertLess(config.MIN_BUY_ORDER, config.MAX_BUY_ORDER)
 
     def test_take_profit_pct(self):
-        self.assertAlmostEqual(config.TAKE_PROFIT_PCT, 0.075)
+        self.assertAlmostEqual(config.TAKE_PROFIT_PCT, 0.05)
 
     def test_stop_loss_pct(self):
-        self.assertAlmostEqual(config.STOP_LOSS_PCT, 0.025)
+        self.assertAlmostEqual(config.STOP_LOSS_PCT, 0.0175)
 
     def test_ema_period(self):
         self.assertEqual(config.EMA_PERIOD, 200)
@@ -311,7 +311,7 @@ class TestOrderLimitValidation(unittest.TestCase):
 
     def test_buy_above_maximum_raises(self):
         with self.assertRaises(OrderSizeError):
-            self.trader._validate_buy_amount(50.01)
+            self.trader._validate_buy_amount(78.01)
 
     def test_buy_way_above_maximum_raises(self):
         with self.assertRaises(OrderSizeError):
@@ -336,9 +336,9 @@ class TestOrderLimitValidation(unittest.TestCase):
 
     def test_error_message_contains_amounts_when_above(self):
         with self.assertRaises(OrderSizeError) as ctx:
-            self.trader._validate_buy_amount(75.0)
-        self.assertIn("75.00", str(ctx.exception))
-        self.assertIn("50.00", str(ctx.exception))
+            self.trader._validate_buy_amount(85.0)
+        self.assertIn("85.00", str(ctx.exception))
+        self.assertIn("78.00", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +386,7 @@ class TestPaperBuy(unittest.TestCase):
 
     def test_buy_above_max_raises_before_exchange_call(self):
         with self.assertRaises(OrderSizeError):
-            self.trader.buy(self.SYMBOL, 60.0)
+            self.trader.buy(self.SYMBOL, 80.0)
         self.trader.exchange.create_market_buy_order.assert_not_called()
 
 
