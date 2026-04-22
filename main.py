@@ -1,13 +1,73 @@
 # main.py
+import datetime
 import logging
 import os
 import time
+from zoneinfo import ZoneInfo
 
 import ccxt
 from dotenv import load_dotenv
 
 from trader import CryptoTrader
 import config
+
+_EST = ZoneInfo("America/New_York")
+_MARKET_OPEN = datetime.time(9, 30)
+_MARKET_CLOSE = datetime.time(16, 0)
+
+
+def is_stock_market_hours(now: datetime.datetime | None = None) -> bool:
+    """Return True when *now* falls within NYSE/Nasdaq regular trading hours.
+
+    Regular hours are Monday–Friday, 09:30–16:00 Eastern Time.
+    Holidays are *not* accounted for; the bot will simply find no tradeable
+    stock symbols on those days because the exchange will have no activity.
+    """
+    if now is None:
+        now = datetime.datetime.now(_EST)
+    else:
+        now = now.astimezone(_EST)
+    if now.weekday() >= 5:   # Saturday = 5, Sunday = 6
+        return False
+    t = now.time()
+    return _MARKET_OPEN <= t < _MARKET_CLOSE
+
+
+def get_tradeable_symbols(
+    all_symbols: list,
+    now: datetime.datetime | None = None,
+) -> list:
+    """Return the subset of *all_symbols* that should be traded right now.
+
+    When ``config.TRADING_SCHEDULE_ENABLED`` is *True*:
+
+    * **Stock market hours** (Mon–Fri 09:30–16:00 ET): only symbols listed in
+      ``config.STOCK_SYMBOLS`` are returned.
+    * **All other times** (evenings, nights, weekends): only symbols *not* in
+      ``config.STOCK_SYMBOLS`` (i.e. cryptocurrencies) are returned.
+
+    When ``config.TRADING_SCHEDULE_ENABLED`` is *False* all symbols are
+    returned unchanged so the bot behaves exactly as before.
+    """
+    if not config.TRADING_SCHEDULE_ENABLED:
+        return list(all_symbols)
+
+    stock_set = set(config.STOCK_SYMBOLS)
+    if is_stock_market_hours(now):
+        active = [s for s in all_symbols if s in stock_set]
+        logging.info(
+            "Stock market hours — trading %d stock/ETF symbol(s): %s",
+            len(active),
+            active,
+        )
+    else:
+        active = [s for s in all_symbols if s not in stock_set]
+        logging.info(
+            "Outside stock market hours — trading %d crypto symbol(s): %s",
+            len(active),
+            active,
+        )
+    return active
 
 load_dotenv()
 
@@ -103,7 +163,7 @@ def main():
             except Exception as exc:
                 logging.warning("Symbol refresh failed (%s). Keeping current list.", exc)
 
-        for symbol in symbols:
+        for symbol in get_tradeable_symbols(symbols):
             try:
                 if symbol not in positions:
                     if bot.should_buy(symbol):

@@ -84,3 +84,22 @@ BUNDLES: dict = {
 # any symbol that belongs to a bundle triggers a buy for the entire bundle.
 # When False (default) the loop behaves exactly as before — single symbols.
 USE_BUNDLES = False
+
+# ---------------------------------------------------------------------------
+# Trading schedule
+# ---------------------------------------------------------------------------
+
+# When True the bot routes symbols based on the time of day:
+#   • NYSE/Nasdaq hours (Mon–Fri 09:30–16:00 ET) → trade only STOCK_SYMBOLS
+#   • All other times                             → trade only non-STOCK_SYMBOLS (crypto)
+# Set to False to disable time-based routing and trade all symbols at all times.
+TRADING_SCHEDULE_ENABLED = True
+
+# Symbols treated as stocks or ETFs for schedule-based routing.
+# Any symbol NOT in this list is treated as crypto.
+STOCK_SYMBOLS: list = [
+    # Tokenized stocks available on Kraken
+    "AAPL/USD", "TSLA/USD", "MSFT/USD", "NVDA/USD", "AMZN/USD",
+    # ETFs available on Kraken
+    "SPY/USD", "QQQ/USD", "VOO/USD",
+]
