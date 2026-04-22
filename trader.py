@@ -7,7 +7,7 @@ and ETFs) through a ccxt-compatible exchange such as Kraken.
 Order constraints
 -----------------
 - Minimum buy order : $30 USD  (config.MIN_BUY_ORDER)
-- Maximum buy order : $50 USD  (config.MAX_BUY_ORDER)
+- Maximum buy order : $78 USD  (config.MAX_BUY_ORDER)
 
 Trade signals
 -------------
@@ -21,7 +21,8 @@ Trade signals
   ``entry_price − config.ATR_STOP_LOSS_MULTIPLIER × ATR``
   (default 1.5 × ATR), adapting risk to current market speed.
 - Exit : RSI above ``config.RSI_OVERBOUGHT`` (default 70) → asset is
-         overbought / expensive; sell to take profit.
+         overbought / expensive; sell to take profit.  Take-profit target is
+         5 % above entry; stop-loss is 1.75 % below entry.
 
 - Volume  : buy orders and buy signals are only issued when the 24-hour
            quote-currency volume is at least ``config.MIN_VOLUME_USD``
@@ -1028,8 +1029,8 @@ class CryptoTrader:
         Returns
         -------
         str
-            * ``"take_profit"`` — current price ≥ entry × (1 + 7.5 %)
-            * ``"stop_loss"``   — current price ≤ entry × (1 − 2.5 %)
+            * ``"take_profit"`` — current price ≥ entry × (1 + 5 %)
+            * ``"stop_loss"``   — current price ≤ entry × (1 − 1.75 %)
             * ``"hold"``        — neither threshold reached
 
         Raises

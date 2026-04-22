@@ -97,7 +97,7 @@ def main():
         paper_trading=config.PAPER_TRADING,
     )
 
-    positions = {}  # symbol -> {"entry_price": float, "quantity": float}
+    positions = {}  # symbol -> {"entry_price": float, "quantity": float, "opened_at": float}
 
     # Seed positions from existing exchange holdings so the bot can apply
     # take-profit and stop-loss to assets held before this session started.
@@ -113,6 +113,7 @@ def main():
                     "quantity": holding["quantity"],
                     "tp_order_id": None,
                     "sl_order_id": None,
+                    "opened_at": time.time(),
                 }
                 logging.info(
                     "Seeded existing holding: %s qty=%.8f entry_price=%.6f",
@@ -190,6 +191,7 @@ def main():
                                         "quantity": order["amount"],
                                         "tp_order_id": exit_orders["take_profit_order_id"],
                                         "sl_order_id": exit_orders["stop_loss_order_id"],
+                                        "opened_at": time.time(),
                                     }
                                     logging.info(
                                         "Opened bundle position (%s): %s @ %s qty=%s "
@@ -212,6 +214,7 @@ def main():
                                 "quantity": order["amount"],
                                 "tp_order_id": exit_orders["take_profit_order_id"],
                                 "sl_order_id": exit_orders["stop_loss_order_id"],
+                                "opened_at": time.time(),
                             }
                             logging.info(
                                 "Opened position: %s @ %s qty=%s TP_order=%s SL_order=%s",
@@ -226,8 +229,29 @@ def main():
                     tp_order_id = positions[symbol].get("tp_order_id")
                     sl_order_id = positions[symbol].get("sl_order_id")
                     quantity = positions[symbol]["quantity"]
+                    opened_at = positions[symbol].get("opened_at", time.time())
+                    # Auto-close if the position has been open for 24 hours
+                    if time.time() - opened_at >= config.MAX_POSITION_HOLD_SECONDS:
+                        # Cancel any pending TP/SL orders before selling at market
+                        for oid in (tp_order_id, sl_order_id):
+                            if oid:
+                                try:
+                                    bot.exchange.cancel_order(oid, symbol)
+                                except Exception as cancel_exc:
+                                    logging.warning(
+                                        "Could not cancel order %s for %s: %s",
+                                        oid, symbol, cancel_exc,
+                                    )
+                        sell_order = bot.sell(symbol, quantity)
+                        logging.info(
+                            "Closed position (max_hold_time): %s qty=%s @ %s",
+                            symbol,
+                            quantity,
+                            sell_order.get("price"),
+                        )
+                        del positions[symbol]
                     # RSI-based take-profit exit (overbought signal)
-                    if bot.should_sell(symbol):
+                    elif bot.should_sell(symbol):
                         sell_order = bot.sell(symbol, quantity)
                         logging.info(
                             "Closed position (rsi_overbought): %s qty=%s @ %s",
