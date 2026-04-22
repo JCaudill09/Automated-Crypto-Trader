@@ -6,6 +6,7 @@ patched with unittest.mock so no API keys are required.
 """
 
 import unittest
+import unittest.mock
 from unittest.mock import MagicMock, patch
 
 import config
@@ -231,6 +232,52 @@ class TestGetUsdSymbols(unittest.TestCase):
         })
         symbols = self.trader.get_usd_symbols()
         self.assertIn("DOT/USD", symbols)
+
+    def test_includes_stocks_and_etfs_when_asset_types_is_none(self):
+        # With ASSET_TYPES = None all market types should be returned.
+        self._set_markets({
+            "BTC/USD":  {"quote": "USD", "active": True, "type": "spot"},
+            "AAPL/USD": {"quote": "USD", "active": True, "type": "spot"},
+            "SPY/USD":  {"quote": "USD", "active": True, "type": "spot"},
+        })
+        with unittest.mock.patch.object(config, "ASSET_TYPES", None):
+            symbols = self.trader.get_usd_symbols()
+        self.assertIn("BTC/USD", symbols)
+        self.assertIn("AAPL/USD", symbols)
+        self.assertIn("SPY/USD", symbols)
+
+    def test_asset_types_filter_includes_matching_types(self):
+        # Only markets whose ``type`` is in ASSET_TYPES should be returned.
+        self._set_markets({
+            "BTC/USD":  {"quote": "USD", "active": True, "type": "spot"},
+            "AAPL/USD": {"quote": "USD", "active": True, "type": "spot"},
+            "BTC-PERP/USD": {"quote": "USD", "active": True, "type": "swap"},
+        })
+        with unittest.mock.patch.object(config, "ASSET_TYPES", ["spot"]):
+            symbols = self.trader.get_usd_symbols()
+        self.assertIn("BTC/USD", symbols)
+        self.assertIn("AAPL/USD", symbols)
+        self.assertNotIn("BTC-PERP/USD", symbols)
+
+    def test_asset_types_filter_excludes_non_matching_types(self):
+        # Markets whose type is not in ASSET_TYPES must be excluded.
+        self._set_markets({
+            "BTC/USD":  {"quote": "USD", "active": True, "type": "spot"},
+            "BTC-PERP/USD": {"quote": "USD", "active": True, "type": "swap"},
+        })
+        with unittest.mock.patch.object(config, "ASSET_TYPES", ["swap"]):
+            symbols = self.trader.get_usd_symbols()
+        self.assertNotIn("BTC/USD", symbols)
+        self.assertIn("BTC-PERP/USD", symbols)
+
+    def test_asset_types_filter_raises_when_no_matching_pairs(self):
+        # If the filter leaves zero results a RuntimeError must be raised.
+        self._set_markets({
+            "BTC/USD": {"quote": "USD", "active": True, "type": "spot"},
+        })
+        with unittest.mock.patch.object(config, "ASSET_TYPES", ["future"]):
+            with self.assertRaises(RuntimeError):
+                self.trader.get_usd_symbols()
 
 
 # ---------------------------------------------------------------------------

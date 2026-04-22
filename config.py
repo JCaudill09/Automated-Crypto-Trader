@@ -1,5 +1,9 @@
 """
 Configuration settings for the Automated Crypto Trader.
+
+Kraken supports trading of cryptocurrencies, tokenized stocks, and ETFs.
+All three asset classes use USD-quoted pairs (e.g. ``"BTC/USD"``,
+``"AAPL/USD"``, ``"SPY/USD"``) and are handled uniformly by the trader.
 """
 
 # Order size limits (in USD)
@@ -9,8 +13,8 @@ MAX_BUY_ORDER = 50.0   # Maximum buy order amount in USD
 # Default exchange to use (must be supported by ccxt)
 DEFAULT_EXCHANGE = "kraken"
 
-# Default trading pairs to monitor
-DEFAULT_SYMBOLS = ["BTC/USD", "ETH/USD"]
+# Default trading pairs to monitor (crypto, stocks, and ETFs are all supported)
+DEFAULT_SYMBOLS = ["BTC/USD", "ETH/USD", "AAPL/USD", "SPY/USD"]
 
 # Paper trading mode — when True, no real orders are placed
 PAPER_TRADING = False
@@ -36,6 +40,17 @@ SIMPLE_ALGO_LONG_PERIOD  = 200  # Long-term EMA period (EMA 200)
 # Volume Profile HD settings
 VOLUME_PROFILE_BINS = 50  # Number of equal-width price bins for the volume profile
 
+# Asset types to include when discovering pairs from the exchange.
+# ccxt market dicts carry a ``type`` field (e.g. ``"spot"``, ``"swap"``,
+# ``"future"``).  Set this to a list of strings to restrict which types are
+# returned by ``get_usd_symbols()``.  ``None`` (the default) disables
+# type-filtering so every active USD pair is included — cryptocurrencies,
+# tokenized stocks, and ETFs alike.
+# Examples:
+#   ASSET_TYPES = ["spot"]         # spot markets only
+#   ASSET_TYPES = None             # no filter — include all market types
+ASSET_TYPES: list | None = None
+
 # How often (in seconds) to refresh the list of tradeable pairs from the exchange
 SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
 
@@ -59,6 +74,10 @@ BUNDLES: dict = {
     "large_caps": ["BTC/USD", "ETH/USD"],
     "defi":       ["LINK/USD", "UNI/USD", "AAVE/USD"],
     "layer1":     ["SOL/USD", "ADA/USD", "DOT/USD"],
+    # Tokenized stocks available on Kraken
+    "stocks":     ["AAPL/USD", "TSLA/USD", "MSFT/USD", "NVDA/USD", "AMZN/USD"],
+    # ETFs available on Kraken
+    "etfs":       ["SPY/USD", "QQQ/USD", "VOO/USD"],
 }
 
 # When True the main trading loop uses bundle-based buying: a buy signal for

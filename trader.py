@@ -1,7 +1,8 @@
 """
 Automated Crypto Trader
 
-Buys and sells cryptocurrency through a ccxt-compatible exchange.
+Buys and sells USD-quoted instruments (cryptocurrencies, tokenized stocks,
+and ETFs) through a ccxt-compatible exchange such as Kraken.
 
 Order constraints
 -----------------
@@ -286,10 +287,17 @@ class CryptoTrader:
         filters to pairs whose quote currency is ``USD`` and which are marked
         active by the exchange.
 
+        When ``config.ASSET_TYPES`` is a non-empty list only markets whose
+        ccxt ``type`` field is contained in that list are included.  This
+        lets callers restrict discovery to specific asset classes, e.g.
+        ``["spot"]`` for spot markets only.  When ``config.ASSET_TYPES`` is
+        ``None`` no type-filtering is applied and all asset types — including
+        cryptocurrencies, tokenized stocks, and ETFs — are returned.
+
         Returns
         -------
         list[str]
-            Sorted list of symbols, e.g. ``["BTC/USD", "ETH/USD", ...]``.
+            Sorted list of symbols, e.g. ``["AAPL/USD", "BTC/USD", "SPY/USD", ...]``.
 
         Raises
         ------
@@ -297,10 +305,16 @@ class CryptoTrader:
             If no active USD pairs are found.
         """
         markets = self.exchange.load_markets()
+        asset_types = config.ASSET_TYPES  # None → no filter
         symbols = sorted(
             symbol
             for symbol, market in markets.items()
-            if market.get("quote") == "USD" and market.get("active", True)
+            if market.get("quote") == "USD"
+            and market.get("active", True)
+            and (
+                asset_types is None
+                or market.get("type") in asset_types
+            )
         )
         if not symbols:
             raise RuntimeError(
