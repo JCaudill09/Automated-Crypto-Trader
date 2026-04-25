@@ -811,7 +811,8 @@ class CryptoTrader:
 
         The middle band is the simple moving average (SMA) of the last
         *period* closes.  The upper and lower bands are placed *num_std*
-        population-standard-deviations above and below the middle band.
+        **population** standard deviations above and below the middle band
+        (variance divided by *period*, not *period − 1*).
 
         Parameters
         ----------

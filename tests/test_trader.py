@@ -712,9 +712,11 @@ class TestComputeBollingerBands(unittest.TestCase):
         self.assertAlmostEqual(result["lower"], 50.0)
 
     def test_price_above_upper_band_on_spike(self):
-        # A sharp price spike at the end should push the last close above the band
+        # A sharp price spike at the end should push the last close above the band.
+        # Verify explicitly by comparing the close against the computed upper value.
         closes = [100.0] * 19 + [200.0]
         result = CryptoTrader._compute_bollinger_bands(closes, 20, 2.0)
+        # The spike is so extreme that the last close must exceed the upper band
         self.assertGreater(closes[-1], result["upper"])
 
     def test_raises_when_too_few_closes(self):
