@@ -11,10 +11,13 @@ Order constraints
 
 Trade signals
 -------------
-- Filter (Trend) : EMA 50 must be **above** the EMA 200 → confirmed uptrend
-                   (golden cross) before a buy is considered.
-- Trigger (Momentum) : RSI must be **below** ``config.RSI_OVERSOLD``
-                        (default 50) → momentum has not yet turned overbought.
+- Volume  : Relative Volume (RVOL) must be at least ``config.RVOL_THRESHOLD``
+            (default 5×) — current candle volume is 5× the rolling average,
+            confirming a high-participation breakout move.
+- Breakout : Price must close **above** the upper Bollinger Band
+             (``config.BB_PERIOD``/``config.BB_NUM_STD``) **or** above the
+             upper Keltner Channel (``config.KC_PERIOD``/``config.KC_MULTIPLIER``)
+             → a confirmed volatility/momentum breakout.
   Both conditions together (plus the 24-hour quote-volume and bid-ask
   spread checks) must pass for a buy signal to fire.
 - Execution (Volatility) : stop-loss is placed at
@@ -800,6 +803,145 @@ class CryptoTrader:
         return ema_short > ema_long
 
     @staticmethod
+    def _compute_bollinger_bands(
+        closes: list, period: int, num_std: float
+    ) -> dict:
+        """
+        Compute Bollinger Bands and return the upper, middle, and lower bands.
+
+        The middle band is the simple moving average (SMA) of the last
+        *period* closes.  The upper and lower bands are placed *num_std*
+        **population** standard deviations above and below the middle band
+        (variance divided by *period*, not *period − 1*).
+
+        Parameters
+        ----------
+        closes :
+            Ordered list of closing prices (oldest first).
+        period :
+            Look-back window for the SMA and standard deviation.
+        num_std :
+            Number of standard deviations for the band width.
+
+        Returns
+        -------
+        dict
+            ``{"upper": float, "middle": float, "lower": float}``
+
+        Raises
+        ------
+        ValueError
+            If fewer than *period* closes are provided.
+        """
+        if len(closes) < period:
+            raise ValueError(
+                f"Need at least {period} closing prices to compute "
+                f"Bollinger Bands, got {len(closes)}."
+            )
+        window = closes[-period:]
+        middle = sum(window) / period
+        variance = sum((p - middle) ** 2 for p in window) / period
+        std = variance ** 0.5
+        return {
+            "upper": middle + num_std * std,
+            "middle": middle,
+            "lower": middle - num_std * std,
+        }
+
+    @staticmethod
+    def _compute_keltner_channels(
+        ohlcv: list, closes: list, period: int, multiplier: float
+    ) -> dict:
+        """
+        Compute Keltner Channels and return the upper, middle, and lower lines.
+
+        The middle line is the EMA of the last *period* closes.  The channel
+        width is *multiplier* × ATR(*period*), so the upper channel is
+        ``EMA + multiplier × ATR`` and the lower channel is
+        ``EMA − multiplier × ATR``.
+
+        Parameters
+        ----------
+        ohlcv :
+            List of OHLCV candles ``[timestamp, open, high, low, close, volume]``.
+        closes :
+            Ordered list of closing prices (oldest first, same length as
+            *ohlcv*).
+        period :
+            EMA and ATR look-back window.
+        multiplier :
+            ATR multiplier for the channel width.
+
+        Returns
+        -------
+        dict
+            ``{"upper": float, "middle": float, "lower": float}``
+
+        Raises
+        ------
+        ValueError
+            If fewer than *period* closes or *period + 1* candles are provided.
+        """
+        if len(closes) < period:
+            raise ValueError(
+                f"Need at least {period} closing prices to compute "
+                f"Keltner Channels, got {len(closes)}."
+            )
+        if len(ohlcv) < period + 1:
+            raise ValueError(
+                f"Need at least {period + 1} candles to compute "
+                f"Keltner Channel ATR-{period}, got {len(ohlcv)}."
+            )
+        middle = CryptoTrader._compute_ema(closes, period)
+        atr = CryptoTrader._compute_atr(ohlcv, period)
+        return {
+            "upper": middle + multiplier * atr,
+            "middle": middle,
+            "lower": middle - multiplier * atr,
+        }
+
+    @staticmethod
+    def _compute_relative_volume(ohlcv: list, period: int) -> float:
+        """
+        Compute the Relative Volume (RVOL) for the most recent candle.
+
+        RVOL = current_candle_volume / average_volume_over_prior_period_candles
+
+        A value of 5.0 means the current candle is trading at 5× its normal
+        pace — a strong signal that an unusual number of participants are
+        active (e.g. a breakout or news-driven move).
+
+        Parameters
+        ----------
+        ohlcv :
+            List of OHLCV candles ``[timestamp, open, high, low, close, volume]``.
+            Must contain at least *period + 1* candles.
+        period :
+            Number of prior candles used to compute the average volume baseline.
+
+        Returns
+        -------
+        float
+            RVOL ratio.  Returns ``0.0`` when the average baseline volume is
+            zero (avoids division by zero).
+
+        Raises
+        ------
+        ValueError
+            If fewer than *period + 1* candles are provided.
+        """
+        if len(ohlcv) < period + 1:
+            raise ValueError(
+                f"Need at least {period + 1} candles to compute "
+                f"RVOL-{period}, got {len(ohlcv)}."
+            )
+        current_volume = float(ohlcv[-1][5])
+        avg_volume = sum(float(c[5]) for c in ohlcv[-(period + 1):-1]) / period
+        if avg_volume == 0.0:
+            return 0.0
+        return current_volume / avg_volume
+
+    @staticmethod
     def _compute_atr(ohlcv: list, period: int = 14) -> float:
         """
         Compute the Average True Range (ATR) and return the last value.
@@ -863,9 +1005,16 @@ class CryptoTrader:
         -------
         dict
             ``{"price": float, "vwap": float, "rsi": float, "atr": float,
-            "volume_profile_poc": float, "simple_algo_signal": bool}``
+            "volume_profile_poc": float, "simple_algo_signal": bool,
+            "bb_upper": float, "bb_middle": float, "bb_lower": float,
+            "kc_upper": float, "kc_middle": float, "kc_lower": float,
+            "rvol": float}``
         """
-        limit = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10
+        limit = max(
+            config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10,
+            config.BB_PERIOD + config.RVOL_PERIOD + 10,
+            config.KC_PERIOD + config.RVOL_PERIOD + 10,
+        )
         ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         closes = [candle[4] for candle in ohlcv]  # index 4 = close price
 
@@ -874,11 +1023,16 @@ class CryptoTrader:
         atr = self._compute_atr(ohlcv, config.ATR_PERIOD)
         volume_profile = self._compute_volume_profile(ohlcv, config.VOLUME_PROFILE_BINS)
         simple_algo_signal = self._compute_simple_algo_signal(closes)
+        bb = self._compute_bollinger_bands(closes, config.BB_PERIOD, config.BB_NUM_STD)
+        kc = self._compute_keltner_channels(
+            ohlcv, closes, config.KC_PERIOD, config.KC_MULTIPLIER
+        )
+        rvol = self._compute_relative_volume(ohlcv, config.RVOL_PERIOD)
         current_price = closes[-1]
 
         logger.debug(
             "Indicators %s — price=%.4f VWAP=%.4f RSI=%.2f ATR=%.6f "
-            "VP_POC=%.4f algo_signal=%s",
+            "VP_POC=%.4f algo_signal=%s BB_upper=%.4f KC_upper=%.4f RVOL=%.2f",
             symbol,
             current_price,
             vwap,
@@ -886,6 +1040,9 @@ class CryptoTrader:
             atr,
             volume_profile["poc"],
             simple_algo_signal,
+            bb["upper"],
+            kc["upper"],
+            rvol,
         )
         return {
             "price": current_price,
@@ -894,6 +1051,13 @@ class CryptoTrader:
             "atr": atr,
             "volume_profile_poc": volume_profile["poc"],
             "simple_algo_signal": simple_algo_signal,
+            "bb_upper": bb["upper"],
+            "bb_middle": bb["middle"],
+            "bb_lower": bb["lower"],
+            "kc_upper": kc["upper"],
+            "kc_middle": kc["middle"],
+            "kc_lower": kc["lower"],
+            "rvol": rvol,
         }
 
     def should_buy(self, symbol: str, timeframe: str = "1h") -> bool:
@@ -902,10 +1066,14 @@ class CryptoTrader:
 
         Buy conditions (both must be met):
 
-        1. EMA 50 is **above** the EMA 200 → confirmed uptrend / golden cross
-           (the trend filter).
-        2. RSI is **below** ``config.RSI_OVERSOLD`` (default 50) →
-           momentum has not yet turned overbought (the momentum trigger).
+        1. Relative Volume (RVOL) ≥ ``config.RVOL_THRESHOLD`` (default 5.0) →
+           current candle volume is at least 5× the rolling average of the
+           prior ``config.RVOL_PERIOD`` candles, confirming unusually high
+           participation (the volume surge filter).
+        2. Price is **above** the upper Bollinger Band
+           (``config.BB_PERIOD``/``config.BB_NUM_STD``) **or** above the upper
+           Keltner Channel (``config.KC_PERIOD``/``config.KC_MULTIPLIER``) →
+           a confirmed volatility or momentum breakout (the breakout trigger).
 
         The minimum 24-hour volume check and the bid-ask spread check must
         also pass.
@@ -918,8 +1086,10 @@ class CryptoTrader:
             Candle interval accepted by the exchange (default ``"1h"``).
         """
         indicators = self.get_indicators(symbol, timeframe)
-        ema_golden_cross = indicators["simple_algo_signal"]
-        rsi_below_threshold = indicators["rsi"] < config.RSI_OVERSOLD
+        price = indicators["price"]
+
+        rvol_high = indicators["rvol"] >= config.RVOL_THRESHOLD
+        breakout = price > indicators["bb_upper"] or price > indicators["kc_upper"]
 
         try:
             self._check_volume(symbol)
@@ -935,14 +1105,18 @@ class CryptoTrader:
             logger.warning("should_buy %s — spread check failed: %s", symbol, exc)
             spread_ok = False
 
-        signal = ema_golden_cross and rsi_below_threshold and volume_ok and spread_ok
+        signal = rvol_high and breakout and volume_ok and spread_ok
 
         logger.info(
-            "should_buy %s — ema_golden_cross=%s rsi_below_threshold=%s "
-            "volume_ok=%s spread_ok=%s → signal=%s",
+            "should_buy %s — rvol=%.2f rvol_high=%s price=%.4f bb_upper=%.4f "
+            "kc_upper=%.4f breakout=%s volume_ok=%s spread_ok=%s → signal=%s",
             symbol,
-            ema_golden_cross,
-            rsi_below_threshold,
+            indicators["rvol"],
+            rvol_high,
+            price,
+            indicators["bb_upper"],
+            indicators["kc_upper"],
+            breakout,
             volume_ok,
             spread_ok,
             signal,

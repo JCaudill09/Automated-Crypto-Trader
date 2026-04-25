@@ -683,8 +683,146 @@ class TestComputeSimpleAlgoSignal(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# get_indicators tests
+# _compute_bollinger_bands tests
 # ---------------------------------------------------------------------------
+
+class TestComputeBollingerBands(unittest.TestCase):
+    def test_returns_expected_keys(self):
+        closes = [float(i) for i in range(1, 21)]
+        result = CryptoTrader._compute_bollinger_bands(closes, 20, 2.0)
+        self.assertIn("upper", result)
+        self.assertIn("middle", result)
+        self.assertIn("lower", result)
+
+    def test_middle_is_sma(self):
+        closes = [10.0] * 20
+        result = CryptoTrader._compute_bollinger_bands(closes, 20, 2.0)
+        self.assertAlmostEqual(result["middle"], 10.0)
+
+    def test_bands_symmetric_around_middle(self):
+        closes = [10.0] * 20
+        result = CryptoTrader._compute_bollinger_bands(closes, 20, 2.0)
+        self.assertAlmostEqual(result["upper"] - result["middle"],
+                               result["middle"] - result["lower"])
+
+    def test_zero_std_produces_flat_bands(self):
+        closes = [50.0] * 20
+        result = CryptoTrader._compute_bollinger_bands(closes, 20, 2.0)
+        self.assertAlmostEqual(result["upper"], 50.0)
+        self.assertAlmostEqual(result["lower"], 50.0)
+
+    def test_price_above_upper_band_on_spike(self):
+        # A sharp price spike at the end should push the last close above the band.
+        # Verify explicitly by comparing the close against the computed upper value.
+        closes = [100.0] * 19 + [200.0]
+        result = CryptoTrader._compute_bollinger_bands(closes, 20, 2.0)
+        # The spike is so extreme that the last close must exceed the upper band
+        self.assertGreater(closes[-1], result["upper"])
+
+    def test_raises_when_too_few_closes(self):
+        with self.assertRaises(ValueError):
+            CryptoTrader._compute_bollinger_bands([100.0] * 5, 20, 2.0)
+
+    def test_uses_last_period_closes(self):
+        # Prepend a different value — only the last 20 closes should matter
+        closes_a = [0.0] * 10 + [10.0] * 20
+        closes_b = [999.0] * 10 + [10.0] * 20
+        result_a = CryptoTrader._compute_bollinger_bands(closes_a, 20, 2.0)
+        result_b = CryptoTrader._compute_bollinger_bands(closes_b, 20, 2.0)
+        self.assertAlmostEqual(result_a["upper"], result_b["upper"])
+
+
+# ---------------------------------------------------------------------------
+# _compute_keltner_channels tests
+# ---------------------------------------------------------------------------
+
+class TestComputeKeltnerChannels(unittest.TestCase):
+    def _flat_ohlcv(self, n: int, price: float = 100.0) -> list:
+        """Build flat OHLCV candles where high == low == close == price."""
+        return [[0, price, price, price, price, 1000.0] for _ in range(n)]
+
+    def test_returns_expected_keys(self):
+        ohlcv = self._flat_ohlcv(25)
+        closes = [c[4] for c in ohlcv]
+        result = CryptoTrader._compute_keltner_channels(ohlcv, closes, 20, 2.0)
+        for key in ("upper", "middle", "lower"):
+            self.assertIn(key, result)
+
+    def test_middle_equals_ema_of_closes(self):
+        ohlcv = self._flat_ohlcv(25)
+        closes = [100.0] * 25
+        result = CryptoTrader._compute_keltner_channels(ohlcv, closes, 20, 2.0)
+        # Flat series → EMA equals the constant price
+        self.assertAlmostEqual(result["middle"], 100.0)
+
+    def test_zero_atr_produces_flat_channels(self):
+        # high == low == close → ATR = 0 → channels equal EMA
+        ohlcv = self._flat_ohlcv(25)
+        closes = [100.0] * 25
+        result = CryptoTrader._compute_keltner_channels(ohlcv, closes, 20, 2.0)
+        self.assertAlmostEqual(result["upper"], 100.0)
+        self.assertAlmostEqual(result["lower"], 100.0)
+
+    def test_channels_symmetric_around_middle(self):
+        ohlcv = _make_atr_ohlcv(25)
+        closes = [c[4] for c in ohlcv]
+        result = CryptoTrader._compute_keltner_channels(ohlcv, closes, 20, 2.0)
+        self.assertAlmostEqual(result["upper"] - result["middle"],
+                               result["middle"] - result["lower"])
+
+    def test_raises_when_too_few_closes(self):
+        ohlcv = self._flat_ohlcv(5)
+        closes = [c[4] for c in ohlcv]
+        with self.assertRaises(ValueError):
+            CryptoTrader._compute_keltner_channels(ohlcv, closes, 20, 2.0)
+
+    def test_raises_when_too_few_ohlcv_for_atr(self):
+        # Enough closes but not enough candles for ATR (need period+1)
+        ohlcv = self._flat_ohlcv(20)
+        closes = [c[4] for c in ohlcv]
+        with self.assertRaises(ValueError):
+            CryptoTrader._compute_keltner_channels(ohlcv, closes, 20, 2.0)
+
+
+# ---------------------------------------------------------------------------
+# _compute_relative_volume tests
+# ---------------------------------------------------------------------------
+
+class TestComputeRelativeVolume(unittest.TestCase):
+    def _ohlcv_with_volumes(self, volumes: list) -> list:
+        return [[0, 100.0, 100.0, 100.0, 100.0, v] for v in volumes]
+
+    def test_rvol_of_one_when_current_equals_average(self):
+        # 20 prior candles all volume=1000, current=1000 → RVOL=1.0
+        ohlcv = self._ohlcv_with_volumes([1000.0] * 21)
+        self.assertAlmostEqual(CryptoTrader._compute_relative_volume(ohlcv, 20), 1.0)
+
+    def test_rvol_of_five_when_current_is_5x_average(self):
+        # 20 prior candles volume=1000, current=5000 → RVOL=5.0
+        ohlcv = self._ohlcv_with_volumes([1000.0] * 20 + [5000.0])
+        self.assertAlmostEqual(CryptoTrader._compute_relative_volume(ohlcv, 20), 5.0)
+
+    def test_rvol_zero_when_avg_volume_is_zero(self):
+        ohlcv = self._ohlcv_with_volumes([0.0] * 20 + [1000.0])
+        self.assertAlmostEqual(CryptoTrader._compute_relative_volume(ohlcv, 20), 0.0)
+
+    def test_rvol_zero_when_current_volume_is_zero(self):
+        ohlcv = self._ohlcv_with_volumes([1000.0] * 20 + [0.0])
+        self.assertAlmostEqual(CryptoTrader._compute_relative_volume(ohlcv, 20), 0.0)
+
+    def test_raises_when_too_few_candles(self):
+        ohlcv = self._ohlcv_with_volumes([1000.0] * 5)
+        with self.assertRaises(ValueError):
+            CryptoTrader._compute_relative_volume(ohlcv, 20)
+
+    def test_uses_only_prior_candles_for_average(self):
+        # The current candle (high volume) should not inflate the average
+        volumes = [100.0] * 20 + [10_000.0]
+        ohlcv = self._ohlcv_with_volumes(volumes)
+        rvol = CryptoTrader._compute_relative_volume(ohlcv, 20)
+        self.assertAlmostEqual(rvol, 100.0)  # 10000 / 100
+
+
 
 class TestGetIndicators(unittest.TestCase):
     SYMBOL = "BTC/USD"
@@ -698,12 +836,10 @@ class TestGetIndicators(unittest.TestCase):
 
     def test_returns_expected_indicator_keys(self):
         result = self.trader.get_indicators(self.SYMBOL)
-        self.assertIn("price", result)
-        self.assertIn("vwap", result)
-        self.assertIn("rsi", result)
-        self.assertIn("atr", result)
-        self.assertIn("volume_profile_poc", result)
-        self.assertIn("simple_algo_signal", result)
+        for key in ("price", "vwap", "rsi", "atr", "volume_profile_poc",
+                    "simple_algo_signal", "bb_upper", "bb_middle", "bb_lower",
+                    "kc_upper", "kc_middle", "kc_lower", "rvol"):
+            self.assertIn(key, result)
 
     def test_price_equals_last_close(self):
         n = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 20
@@ -714,7 +850,11 @@ class TestGetIndicators(unittest.TestCase):
 
     def test_fetch_ohlcv_called_with_correct_limit(self):
         self.trader.get_indicators(self.SYMBOL, timeframe="4h")
-        expected_limit = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10
+        expected_limit = max(
+            config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10,
+            config.BB_PERIOD + config.RVOL_PERIOD + 10,
+            config.KC_PERIOD + config.RVOL_PERIOD + 10,
+        )
         self.trader.exchange.fetch_ohlcv.assert_called_once_with(
             self.SYMBOL, "4h", limit=expected_limit
         )
@@ -729,9 +869,21 @@ class TestShouldBuy(unittest.TestCase):
 
     def _set_indicators(self, trader, price, vwap, rsi,
                         volume_profile_poc=None, simple_algo_signal=True,
-                        quote_volume=None, bid=None, atr=1.0):
-        """Patch get_indicators to return controlled values and set up a ticker mock."""
+                        quote_volume=None, bid=None, atr=1.0,
+                        rvol=None, bb_upper=None, kc_upper=None):
+        """Patch get_indicators to return controlled values and set up a ticker mock.
+
+        Defaults produce a signal that fires: RVOL is 5× threshold, and price
+        is above both the Bollinger Band upper and Keltner Channel upper.
+        """
         poc = volume_profile_poc if volume_profile_poc is not None else price - 10.0
+        # Default: RVOL just meets threshold, price breaks above both bands
+        if rvol is None:
+            rvol = config.RVOL_THRESHOLD
+        if bb_upper is None:
+            bb_upper = price - 1.0   # price is above the upper band
+        if kc_upper is None:
+            kc_upper = price - 1.0   # price is above the upper channel
         trader.get_indicators = MagicMock(
             return_value={
                 "price": price,
@@ -740,6 +892,13 @@ class TestShouldBuy(unittest.TestCase):
                 "atr": atr,
                 "volume_profile_poc": poc,
                 "simple_algo_signal": simple_algo_signal,
+                "bb_upper": bb_upper,
+                "bb_middle": bb_upper - 5.0,
+                "bb_lower": bb_upper - 10.0,
+                "kc_upper": kc_upper,
+                "kc_middle": kc_upper - 5.0,
+                "kc_lower": kc_upper - 10.0,
+                "rvol": rvol,
             }
         )
         trader.exchange.fetch_ticker.return_value = _make_ticker(
@@ -747,55 +906,72 @@ class TestShouldBuy(unittest.TestCase):
         )
 
     def test_buy_signal_when_all_conditions_met(self):
+        # RVOL at threshold, price above both BB and KC upper bands
         trader = _make_trader()
         self._set_indicators(trader, price=110.0, vwap=100.0, rsi=25.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_ema50_below_ema200(self):
-        # EMA 50 below EMA 200 (no golden cross) → no buy signal
+    def test_no_signal_when_rvol_below_threshold(self):
+        # RVOL below 5× → no buy signal even if price breaks out
         trader = _make_trader()
-        self._set_indicators(trader, price=90.0, vwap=100.0, rsi=25.0,
-                             simple_algo_signal=False)
+        self._set_indicators(trader, price=110.0, vwap=100.0, rsi=25.0,
+                             rvol=config.RVOL_THRESHOLD - 0.1)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_rvol_is_zero(self):
+        trader = _make_trader()
+        self._set_indicators(trader, price=110.0, vwap=100.0, rsi=25.0, rvol=0.0)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_buy_signal_when_price_above_bb_upper_only(self):
+        # Price above BB upper but below KC upper → breakout via BB alone is enough
+        trader = _make_trader()
+        price = 110.0
+        self._set_indicators(trader, price=price, vwap=100.0, rsi=25.0,
+                             bb_upper=price - 1.0,   # price > BB upper
+                             kc_upper=price + 5.0)   # price < KC upper
+        self.assertTrue(trader.should_buy(self.SYMBOL))
+
+    def test_buy_signal_when_price_above_kc_upper_only(self):
+        # Price above KC upper but below BB upper → breakout via KC alone is enough
+        trader = _make_trader()
+        price = 110.0
+        self._set_indicators(trader, price=price, vwap=100.0, rsi=25.0,
+                             bb_upper=price + 5.0,   # price < BB upper
+                             kc_upper=price - 1.0)   # price > KC upper
+        self.assertTrue(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_price_below_both_bands(self):
+        # Price below both upper bands → no breakout
+        trader = _make_trader()
+        price = 110.0
+        self._set_indicators(trader, price=price, vwap=100.0, rsi=25.0,
+                             bb_upper=price + 5.0,   # price < BB upper
+                             kc_upper=price + 5.0)   # price < KC upper
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
     def test_buy_signal_fires_regardless_of_volume_profile_poc(self):
-        # POC is no longer a buy condition; price below POC but above VWAP
-        # with RSI oversold should still signal a buy.
+        # POC is not a buy condition; signal should fire regardless of POC position
         trader = _make_trader()
         self._set_indicators(trader, price=90.0, vwap=80.0, rsi=25.0,
                              volume_profile_poc=100.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_ema50_below_ema200_regardless_of_price(self):
-        # EMA golden cross is required; price above VWAP alone is not enough.
-        trader = _make_trader()
-        self._set_indicators(trader, price=110.0, vwap=100.0, rsi=25.0,
-                             simple_algo_signal=False)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
-    def test_no_signal_when_rsi_not_oversold(self):
-        trader = _make_trader()
-        self._set_indicators(trader, price=110.0, vwap=100.0, rsi=50.0)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
-    def test_no_signal_when_rsi_at_exact_oversold_threshold(self):
-        # RSI must be *below* the threshold, not equal
-        trader = _make_trader()
-        self._set_indicators(
-            trader, price=110.0, vwap=100.0, rsi=config.RSI_OVERSOLD
-        )
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
     def test_no_signal_when_multiple_conditions_fail(self):
+        # RVOL too low and no breakout
         trader = _make_trader()
-        self._set_indicators(trader, price=90.0, vwap=100.0, rsi=60.0,
-                             simple_algo_signal=False)
+        price = 90.0
+        self._set_indicators(trader, price=price, vwap=100.0, rsi=60.0,
+                             rvol=1.0,
+                             bb_upper=price + 10.0,
+                             kc_upper=price + 10.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
-    def test_buy_fires_when_rsi_just_below_new_threshold(self):
-        # RSI = 49 is below the threshold of 50, so a buy signal fires.
+    def test_buy_fires_when_rvol_just_meets_threshold(self):
+        # RVOL exactly at threshold → signal fires (>= comparison)
         trader = _make_trader()
-        self._set_indicators(trader, price=110.0, vwap=100.0, rsi=49.0)
+        self._set_indicators(trader, price=110.0, vwap=100.0, rsi=49.0,
+                             rvol=config.RVOL_THRESHOLD)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
 
@@ -1017,14 +1193,22 @@ class TestVolumeIntegration(unittest.TestCase):
 
     def _bullish_indicators(self, trader):
         """Patch get_indicators so the technical conditions fire."""
+        price = 110.0
         trader.get_indicators = MagicMock(
             return_value={
-                "price": 110.0,
+                "price": price,
                 "vwap": 100.0,
                 "atr": 1.0,
                 "volume_profile_poc": 100.0,
                 "simple_algo_signal": True,
                 "rsi": 25.0,
+                "bb_upper": price - 1.0,
+                "bb_middle": price - 6.0,
+                "bb_lower": price - 11.0,
+                "kc_upper": price - 1.0,
+                "kc_middle": price - 6.0,
+                "kc_lower": price - 11.0,
+                "rvol": config.RVOL_THRESHOLD,
             }
         )
 
@@ -1125,6 +1309,13 @@ class TestCheckSpread(unittest.TestCase):
                 "volume_profile_poc": 100.0,
                 "simple_algo_signal": True,
                 "rsi": 25.0,
+                "bb_upper": price - 1.0,
+                "bb_middle": price - 6.0,
+                "bb_lower": price - 11.0,
+                "kc_upper": price - 1.0,
+                "kc_middle": price - 6.0,
+                "kc_lower": price - 11.0,
+                "rvol": config.RVOL_THRESHOLD,
             }
         )
         self.assertFalse(trader.should_buy(self.SYMBOL))
