@@ -115,7 +115,7 @@ class TestConfig(unittest.TestCase):
         self.assertLess(config.MIN_BUY_ORDER, config.MAX_BUY_ORDER)
 
     def test_take_profit_pct(self):
-        self.assertAlmostEqual(config.TAKE_PROFIT_PCT, 0.05)
+        self.assertAlmostEqual(config.TAKE_PROFIT_PCT, 0.07)
 
     def test_stop_loss_pct(self):
         self.assertAlmostEqual(config.STOP_LOSS_PCT, 0.0175)
