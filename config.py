@@ -24,7 +24,7 @@ PAPER_TRADING = False
 MAX_POSITION_HOLD_SECONDS = 86400  # 24 hours
 
 # Profit taking and stop loss (as fractions of entry price)
-TAKE_PROFIT_PCT = 0.05    # Close position when price rises 5 % above entry
+TAKE_PROFIT_PCT = 0.055   # Close position when price rises 5.5 % above entry
 STOP_LOSS_PCT   = 0.0175  # Close position when price falls 1.75 % below entry
 
 # Technical indicator settings

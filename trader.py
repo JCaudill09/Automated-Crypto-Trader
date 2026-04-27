@@ -1203,7 +1203,7 @@ class CryptoTrader:
         Returns
         -------
         str
-            * ``"take_profit"`` — current price ≥ entry × (1 + 5 %)
+            * ``"take_profit"`` — current price ≥ entry × (1 + 5.5 %)
             * ``"stop_loss"``   — current price ≤ entry × (1 − 1.75 %)
             * ``"hold"``        — neither threshold reached
 
