@@ -11,21 +11,42 @@ Order constraints
 
 Trade signals
 -------------
-- Volume  : Relative Volume (RVOL) must be at least ``config.RVOL_THRESHOLD``
-            (default 5×) — current candle volume is 5× the rolling average,
-            confirming a high-participation breakout move.
-- Breakout : Price must close **above** the upper Bollinger Band
-             (``config.BB_PERIOD``/``config.BB_NUM_STD``) **or** above the
-             upper Keltner Channel (``config.KC_PERIOD``/``config.KC_MULTIPLIER``)
-             → a confirmed volatility/momentum breakout.
-  Both conditions together (plus the 24-hour quote-volume and bid-ask
-  spread checks) must pass for a buy signal to fire.
+Both ``should_buy`` and ``should_sell`` use a **comprehensive five-indicator
+scoring system**.  Each indicator contributes one point toward a score;
+the signal fires when the score meets or exceeds the configured threshold.
+
+Buy signal
+~~~~~~~~~~
+Scored conditions (3 out of 5 required by default):
+
+1. **RSI** < ``config.RSI_OVERSOLD`` (50) — momentum not yet extended.
+2. **WaveTrend** WT1 > WT2 and WT1 < overbought level — bullish momentum.
+3. **CCI** > ``config.CCI_OVERSOLD`` (−100) — recovering from oversold.
+4. **ADX** > ``config.ADX_THRESHOLD`` (20) and +DI > −DI — uptrend strength.
+5. **Kernel Filter** — price ≥ kernel-smoothed regression line (upward bias).
+
+Mandatory gates (must all pass regardless of score):
+
+- RVOL ≥ ``config.RVOL_THRESHOLD`` (5.0×) — volume surge confirmation.
+- Price above the upper Bollinger Band **or** upper Keltner Channel —
+  confirmed breakout.
+- 24-hour quote volume ≥ ``config.MIN_VOLUME_USD`` ($15 000).
+- Bid-ask spread < ``config.MAX_BID_ASK_SPREAD_PCT`` (0.75 %).
+
+Sell signal
+~~~~~~~~~~~
+Scored conditions (3 out of 5 required by default):
+
+1. **RSI** > ``config.RSI_OVERBOUGHT`` (70) — overbought; take profit.
+2. **WaveTrend** WT1 < WT2 **or** WT1 above overbought level — momentum fading.
+3. **CCI** > ``config.CCI_OVERBOUGHT`` (+100) — overbought on CCI.
+4. **ADX** > ``config.ADX_THRESHOLD`` (20) and −DI > +DI — downtrend strength.
+5. **Kernel Filter** — price < kernel-smoothed regression line (downward bias).
+
 - Execution (Volatility) : stop-loss is placed at
   ``entry_price − config.ATR_STOP_LOSS_MULTIPLIER × ATR``
   (default 1.5 × ATR), adapting risk to current market speed.
-- Exit : RSI above ``config.RSI_OVERBOUGHT`` (default 70) → asset is
-         overbought / expensive; sell to take profit.  Take-profit target is
-         5 % above entry; stop-loss is 1.75 % below entry.
+- Take-profit target is 5.5 % above entry; stop-loss is 1.75 % below entry.
 
 - Volume  : buy orders and buy signals are only issued when the 24-hour
            quote-currency volume is at least ``config.MIN_VOLUME_USD``
@@ -990,6 +1011,277 @@ class CryptoTrader:
             atr = (atr * (period - 1) + tr) / period
         return atr
 
+    @staticmethod
+    def _compute_wavetrend(
+        ohlcv: list,
+        n1: int = 10,
+        n2: int = 21,
+        ma_len: int = 4,
+    ) -> dict:
+        """
+        Compute the WaveTrend oscillator and return WT1 and WT2.
+
+        WaveTrend uses the HLC3 (typical price) to build two oscillator lines:
+
+        * ``WT1`` — the smoothed channel indicator (EMA of a normalised
+          deviation of HLC3 from its own EMA).
+        * ``WT2`` — a simple moving average of WT1 used as the trigger line.
+
+        A bullish crossover occurs when WT1 crosses above WT2; a bearish
+        crossover occurs when WT1 crosses below WT2.
+
+        Parameters
+        ----------
+        ohlcv :
+            List of OHLCV candles
+            ``[timestamp, open, high, low, close, volume]``.
+        n1 :
+            Channel period — EMA length used to smooth HLC3 (default 10).
+        n2 :
+            Average period — EMA length applied to the normalised CI series
+            to produce WT1 (default 21).
+        ma_len :
+            SMA length used to derive WT2 from WT1 (default 4).
+
+        Returns
+        -------
+        dict
+            ``{"wt1": float, "wt2": float}`` — the final WT1 and WT2 values.
+
+        Raises
+        ------
+        ValueError
+            If fewer than ``n1 + n2 + ma_len`` candles are provided.
+        """
+        min_candles = n1 + n2 + ma_len
+        if len(ohlcv) < min_candles:
+            raise ValueError(
+                f"Need at least {min_candles} candles to compute WaveTrend "
+                f"(n1={n1}, n2={n2}, ma_len={ma_len}), got {len(ohlcv)}."
+            )
+
+        hlc3 = [(c[2] + c[3] + c[4]) / 3.0 for c in ohlcv]
+
+        # EMA of HLC3 over n1 (esa)
+        multiplier_n1 = 2.0 / (n1 + 1)
+        esa = sum(hlc3[:n1]) / n1
+        esa_series = [esa]
+        for price in hlc3[n1:]:
+            esa = price * multiplier_n1 + esa * (1.0 - multiplier_n1)
+            esa_series.append(esa)
+
+        # Rebuild a full-length esa list (first n1-1 entries are unavailable;
+        # pad with the seed value so indices align with hlc3).
+        esa_full = [esa_series[0]] * (n1 - 1) + esa_series
+
+        # EMA of |HLC3 - esa| over n1 (d)
+        abs_dev = [abs(hlc3[i] - esa_full[i]) for i in range(len(hlc3))]
+        d = sum(abs_dev[:n1]) / n1
+        d_series = [d]
+        for dev in abs_dev[n1:]:
+            d = dev * multiplier_n1 + d * (1.0 - multiplier_n1)
+            d_series.append(d)
+        d_full = [d_series[0]] * (n1 - 1) + d_series
+
+        # Channel Index: ci = (hlc3 - esa) / (0.015 * d)
+        ci = []
+        for i in range(len(hlc3)):
+            denom = 0.015 * d_full[i]
+            ci.append((hlc3[i] - esa_full[i]) / denom if denom != 0.0 else 0.0)
+
+        # WT1 = EMA(ci, n2)
+        multiplier_n2 = 2.0 / (n2 + 1)
+        wt1_val = sum(ci[:n2]) / n2
+        wt1_series = [wt1_val]
+        for val in ci[n2:]:
+            wt1_val = val * multiplier_n2 + wt1_val * (1.0 - multiplier_n2)
+            wt1_series.append(wt1_val)
+
+        # WT2 = SMA(WT1, ma_len)  — computed from the last ma_len WT1 values
+        wt2_val = sum(wt1_series[-ma_len:]) / ma_len
+
+        return {"wt1": wt1_series[-1], "wt2": wt2_val}
+
+    @staticmethod
+    def _compute_cci(ohlcv: list, period: int = 20) -> float:
+        """
+        Compute the Commodity Channel Index (CCI) and return the latest value.
+
+        CCI = (typical_price − SMA(typical_price, period)) /
+              (0.015 × mean_deviation)
+
+        where ``typical_price = (high + low + close) / 3`` and
+        ``mean_deviation`` is the mean of ``|typical_price − SMA|`` over the
+        same *period*.
+
+        CCI above +100 indicates overbought conditions; below −100 indicates
+        oversold conditions.
+
+        Parameters
+        ----------
+        ohlcv :
+            List of OHLCV candles
+            ``[timestamp, open, high, low, close, volume]``.
+        period :
+            Look-back window (default 20).
+
+        Returns
+        -------
+        float
+            CCI value for the most recent candle.
+
+        Raises
+        ------
+        ValueError
+            If fewer than *period* candles are provided.
+        """
+        if len(ohlcv) < period:
+            raise ValueError(
+                f"Need at least {period} candles to compute CCI-{period}, "
+                f"got {len(ohlcv)}."
+            )
+        window = ohlcv[-period:]
+        typical_prices = [(c[2] + c[3] + c[4]) / 3.0 for c in window]
+        sma = sum(typical_prices) / period
+        mean_dev = sum(abs(tp - sma) for tp in typical_prices) / period
+        if mean_dev == 0.0:
+            return 0.0
+        return (typical_prices[-1] - sma) / (0.015 * mean_dev)
+
+    @staticmethod
+    def _compute_adx(ohlcv: list, period: int = 14) -> dict:
+        """
+        Compute the Average Directional Index (ADX) and return ADX, +DI, −DI.
+
+        Uses Wilder's smoothing for the True Range, Directional Movement, and
+        DX series — the same approach used in the standard ADX calculation.
+
+        * ``adx``      — trend strength (0–100; values above 20–25 indicate a
+          trending market).
+        * ``plus_di``  — positive directional indicator (+DI); when +DI > −DI
+          the trend is upward.
+        * ``minus_di`` — negative directional indicator (−DI).
+
+        Parameters
+        ----------
+        ohlcv :
+            List of OHLCV candles
+            ``[timestamp, open, high, low, close, volume]``.
+        period :
+            Wilder smoothing period (default 14).
+
+        Returns
+        -------
+        dict
+            ``{"adx": float, "plus_di": float, "minus_di": float}``
+
+        Raises
+        ------
+        ValueError
+            If fewer than ``2 * period + 1`` candles are provided (the minimum
+            needed to seed +DM/-DM smoothing and then compute ADX).
+        """
+        min_candles = 2 * period + 1
+        if len(ohlcv) < min_candles:
+            raise ValueError(
+                f"Need at least {min_candles} candles to compute ADX-{period}, "
+                f"got {len(ohlcv)}."
+            )
+
+        tr_list, plus_dm_list, minus_dm_list = [], [], []
+        for i in range(1, len(ohlcv)):
+            high, low, close = ohlcv[i][2], ohlcv[i][3], ohlcv[i][4]
+            prev_high = ohlcv[i - 1][2]
+            prev_low  = ohlcv[i - 1][3]
+            prev_close = ohlcv[i - 1][4]
+
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+            up_move   = high - prev_high
+            down_move = prev_low - low
+            pdm = up_move   if up_move > down_move and up_move > 0   else 0.0
+            mdm = down_move if down_move > up_move and down_move > 0 else 0.0
+
+            tr_list.append(tr)
+            plus_dm_list.append(pdm)
+            minus_dm_list.append(mdm)
+
+        # Seed Wilder's smoothed values with the simple average of the first
+        # `period` values, then apply Wilder's update for the rest.
+        atr_w  = sum(tr_list[:period]) / period
+        pdm_w  = sum(plus_dm_list[:period]) / period
+        mdm_w  = sum(minus_dm_list[:period]) / period
+
+        dx_list = []
+        for i in range(period, len(tr_list)):
+            atr_w = (atr_w * (period - 1) + tr_list[i])  / period
+            pdm_w = (pdm_w * (period - 1) + plus_dm_list[i])  / period
+            mdm_w = (mdm_w * (period - 1) + minus_dm_list[i]) / period
+
+            plus_di  = 100.0 * pdm_w / atr_w if atr_w != 0.0 else 0.0
+            minus_di = 100.0 * mdm_w / atr_w if atr_w != 0.0 else 0.0
+            di_sum = plus_di + minus_di
+            dx = 100.0 * abs(plus_di - minus_di) / di_sum if di_sum != 0.0 else 0.0
+            dx_list.append((dx, plus_di, minus_di))
+
+        # ADX = Wilder's smoothing of DX over `period` values
+        adx = sum(d[0] for d in dx_list[:period]) / period
+        for dx, plus_di_val, minus_di_val in dx_list[period:]:
+            adx = (adx * (period - 1) + dx) / period
+        # The last computed +DI/-DI represent the final bar
+        final_plus_di  = dx_list[-1][1]
+        final_minus_di = dx_list[-1][2]
+
+        return {"adx": adx, "plus_di": final_plus_di, "minus_di": final_minus_di}
+
+    @staticmethod
+    def _compute_kernel_filter(closes: list, bandwidth: int = 8) -> float:
+        """
+        Compute a Rational Quadratic kernel-weighted regression estimate.
+
+        The kernel assigns weights to the most recent *bandwidth* closing prices
+        using the Rational Quadratic (RQ) kernel function:
+
+            K(i) = (1 + i² / (2 × alpha × bandwidth²))^(−alpha)
+
+        with ``alpha = 1``, which decays smoothly from 1 at distance 0 toward
+        0 at large distances.  The result is a noise-reduced estimate of the
+        current price level (a non-parametric trend line).
+
+        * Price **above** the kernel line → upward trend bias (buy-friendly).
+        * Price **below** the kernel line → downward trend bias (sell-friendly).
+
+        Parameters
+        ----------
+        closes :
+            Ordered list of closing prices (oldest first).
+        bandwidth :
+            Number of prior bars used as the kernel window (default 8).
+
+        Returns
+        -------
+        float
+            Kernel-smoothed price estimate at the most recent bar.
+
+        Raises
+        ------
+        ValueError
+            If fewer than *bandwidth* closing prices are provided.
+        """
+        if len(closes) < bandwidth:
+            raise ValueError(
+                f"Need at least {bandwidth} closing prices for Kernel Filter "
+                f"(bandwidth={bandwidth}), got {len(closes)}."
+            )
+        alpha = 1.0
+        window = closes[-bandwidth:]
+        weights = [
+            (1.0 + (i * i) / (2.0 * alpha * bandwidth * bandwidth)) ** (-alpha)
+            for i in range(bandwidth)
+        ]
+        total_weight = sum(weights)
+        kernel_val = sum(w * p for w, p in zip(weights, reversed(window)))
+        return kernel_val / total_weight
+
     def get_indicators(self, symbol: str, timeframe: str = "1h") -> dict:
         """
         Fetch OHLCV candles and return the latest indicator values.
@@ -1008,12 +1300,22 @@ class CryptoTrader:
             "volume_profile_poc": float, "simple_algo_signal": bool,
             "bb_upper": float, "bb_middle": float, "bb_lower": float,
             "kc_upper": float, "kc_middle": float, "kc_lower": float,
-            "rvol": float}``
+            "rvol": float,
+            "wt1": float, "wt2": float,
+            "cci": float,
+            "adx": float, "plus_di": float, "minus_di": float,
+            "kernel": float}``
         """
+        wt_min = config.WT_CHANNEL_LENGTH + config.WT_AVERAGE_LENGTH + config.WT_MA_LENGTH
+        adx_min = 2 * config.ADX_PERIOD + 1
         limit = max(
             config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10,
             config.BB_PERIOD + config.RVOL_PERIOD + 10,
             config.KC_PERIOD + config.RVOL_PERIOD + 10,
+            wt_min + 10,
+            adx_min + 10,
+            config.CCI_PERIOD + 10,
+            config.KERNEL_BANDWIDTH + 10,
         )
         ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         closes = [candle[4] for candle in ohlcv]  # index 4 = close price
@@ -1028,11 +1330,18 @@ class CryptoTrader:
             ohlcv, closes, config.KC_PERIOD, config.KC_MULTIPLIER
         )
         rvol = self._compute_relative_volume(ohlcv, config.RVOL_PERIOD)
+        wt = self._compute_wavetrend(
+            ohlcv, config.WT_CHANNEL_LENGTH, config.WT_AVERAGE_LENGTH, config.WT_MA_LENGTH
+        )
+        cci = self._compute_cci(ohlcv, config.CCI_PERIOD)
+        adx_result = self._compute_adx(ohlcv, config.ADX_PERIOD)
+        kernel = self._compute_kernel_filter(closes, config.KERNEL_BANDWIDTH)
         current_price = closes[-1]
 
         logger.debug(
             "Indicators %s — price=%.4f VWAP=%.4f RSI=%.2f ATR=%.6f "
-            "VP_POC=%.4f algo_signal=%s BB_upper=%.4f KC_upper=%.4f RVOL=%.2f",
+            "VP_POC=%.4f algo_signal=%s BB_upper=%.4f KC_upper=%.4f RVOL=%.2f "
+            "WT1=%.2f WT2=%.2f CCI=%.2f ADX=%.2f +DI=%.2f -DI=%.2f kernel=%.4f",
             symbol,
             current_price,
             vwap,
@@ -1043,6 +1352,13 @@ class CryptoTrader:
             bb["upper"],
             kc["upper"],
             rvol,
+            wt["wt1"],
+            wt["wt2"],
+            cci,
+            adx_result["adx"],
+            adx_result["plus_di"],
+            adx_result["minus_di"],
+            kernel,
         )
         return {
             "price": current_price,
@@ -1058,25 +1374,45 @@ class CryptoTrader:
             "kc_middle": kc["middle"],
             "kc_lower": kc["lower"],
             "rvol": rvol,
+            "wt1": wt["wt1"],
+            "wt2": wt["wt2"],
+            "cci": cci,
+            "adx": adx_result["adx"],
+            "plus_di": adx_result["plus_di"],
+            "minus_di": adx_result["minus_di"],
+            "kernel": kernel,
         }
 
     def should_buy(self, symbol: str, timeframe: str = "1h") -> bool:
         """
-        Return ``True`` when the buy signal fires.
+        Return ``True`` when the comprehensive buy signal fires.
 
-        Buy conditions (both must be met):
+        The signal combines five momentum/trend indicators (each contributing
+        one point toward a buy score) with mandatory volume and breakout gates:
 
-        1. Relative Volume (RVOL) ≥ ``config.RVOL_THRESHOLD`` (default 5.0) →
-           current candle volume is at least 5× the rolling average of the
-           prior ``config.RVOL_PERIOD`` candles, confirming unusually high
-           participation (the volume surge filter).
-        2. Price is **above** the upper Bollinger Band
-           (``config.BB_PERIOD``/``config.BB_NUM_STD``) **or** above the upper
-           Keltner Channel (``config.KC_PERIOD``/``config.KC_MULTIPLIER``) →
-           a confirmed volatility or momentum breakout (the breakout trigger).
+        **Scored conditions** (each worth 1 point; scored against
+        ``config.BUY_SIGNAL_THRESHOLD``, default 3 out of 5):
 
-        The minimum 24-hour volume check and the bid-ask spread check must
-        also pass.
+        1. **RSI** < ``config.RSI_OVERSOLD`` (default 50) — momentum has not
+           yet reached overbought territory.
+        2. **WaveTrend** — WT1 > WT2 (bullish momentum crossover direction)
+           and WT1 is below the overbought level (``config.WT_OVERBOUGHT``).
+        3. **CCI** > ``config.CCI_OVERSOLD`` (default −100) — price is above
+           the oversold threshold, indicating recovering momentum.
+        4. **ADX** > ``config.ADX_THRESHOLD`` (default 20) and +DI > −DI —
+           a trending market with upward directional bias.
+        5. **Kernel Filter** — current price ≥ kernel-smoothed regression line,
+           confirming the trend direction is upward.
+
+        **Mandatory gates** (all must pass regardless of score):
+
+        * RVOL ≥ ``config.RVOL_THRESHOLD`` (default 5.0) — unusually high
+          participation confirms the move.
+        * Price above the upper Bollinger Band **or** upper Keltner Channel —
+          confirmed volatility or momentum breakout.
+        * 24-hour quote volume ≥ ``config.MIN_VOLUME_USD`` — sufficient
+          liquidity.
+        * Bid-ask spread < ``config.MAX_BID_ASK_SPREAD_PCT`` — tight market.
 
         Parameters
         ----------
@@ -1084,12 +1420,35 @@ class CryptoTrader:
             Trading pair, e.g. ``"BTC/USD"``.
         timeframe :
             Candle interval accepted by the exchange (default ``"1h"``).
+
+        Returns
+        -------
+        bool
+            ``True`` when buy_score ≥ ``config.BUY_SIGNAL_THRESHOLD`` and all
+            mandatory gates pass.
         """
         indicators = self.get_indicators(symbol, timeframe)
         price = indicators["price"]
 
+        # --- Scored indicator conditions (1 point each) ---
+        rsi_bullish = indicators["rsi"] < config.RSI_OVERSOLD
+        wt_bullish  = (
+            indicators["wt1"] > indicators["wt2"]
+            and indicators["wt1"] < config.WT_OVERBOUGHT
+        )
+        cci_bullish  = indicators["cci"] > config.CCI_OVERSOLD
+        adx_bullish  = (
+            indicators["adx"] > config.ADX_THRESHOLD
+            and indicators["plus_di"] > indicators["minus_di"]
+        )
+        kernel_bullish = price >= indicators["kernel"]
+
+        buy_score = sum([rsi_bullish, wt_bullish, cci_bullish, adx_bullish, kernel_bullish])
+        score_ok = buy_score >= config.BUY_SIGNAL_THRESHOLD
+
+        # --- Mandatory gates ---
         rvol_high = indicators["rvol"] >= config.RVOL_THRESHOLD
-        breakout = price > indicators["bb_upper"] or price > indicators["kc_upper"]
+        breakout  = price > indicators["bb_upper"] or price > indicators["kc_upper"]
 
         try:
             self._check_volume(symbol)
@@ -1105,32 +1464,47 @@ class CryptoTrader:
             logger.warning("should_buy %s — spread check failed: %s", symbol, exc)
             spread_ok = False
 
-        signal = rvol_high and breakout and volume_ok and spread_ok
+        signal = score_ok and rvol_high and breakout and volume_ok and spread_ok
 
         logger.info(
-            "should_buy %s — rvol=%.2f rvol_high=%s price=%.4f bb_upper=%.4f "
-            "kc_upper=%.4f breakout=%s volume_ok=%s spread_ok=%s → signal=%s",
+            "should_buy %s — rsi=%.2f(bull=%s) wt1=%.2f wt2=%.2f(bull=%s) "
+            "cci=%.2f(bull=%s) adx=%.2f +di=%.2f -di=%.2f(bull=%s) "
+            "kernel=%.4f(bull=%s) score=%d/%d score_ok=%s "
+            "rvol=%.2f(ok=%s) breakout=%s volume_ok=%s spread_ok=%s → signal=%s",
             symbol,
-            indicators["rvol"],
-            rvol_high,
-            price,
-            indicators["bb_upper"],
-            indicators["kc_upper"],
-            breakout,
-            volume_ok,
-            spread_ok,
+            indicators["rsi"], rsi_bullish,
+            indicators["wt1"], indicators["wt2"], wt_bullish,
+            indicators["cci"], cci_bullish,
+            indicators["adx"], indicators["plus_di"], indicators["minus_di"], adx_bullish,
+            indicators["kernel"], kernel_bullish,
+            buy_score, config.BUY_SIGNAL_THRESHOLD, score_ok,
+            indicators["rvol"], rvol_high,
+            breakout, volume_ok, spread_ok,
             signal,
         )
         return signal
 
     def should_sell(self, symbol: str, timeframe: str = "1h") -> bool:
         """
-        Return ``True`` when the RSI-based take-profit exit signal fires.
+        Return ``True`` when the comprehensive sell signal fires.
 
-        Sell condition:
+        The signal combines five momentum/trend indicators (each contributing
+        one point toward a sell score):
 
-        * RSI is **above** ``config.RSI_OVERBOUGHT`` (default 70) →
-          the asset is overbought / expensive; take profit.
+        **Scored conditions** (each worth 1 point; scored against
+        ``config.SELL_SIGNAL_THRESHOLD``, default 3 out of 5):
+
+        1. **RSI** > ``config.RSI_OVERBOUGHT`` (default 70) — asset is
+           overbought; take-profit opportunity.
+        2. **WaveTrend** — WT1 < WT2 (bearish direction) **or** WT1 is above
+           the overbought level (``config.WT_OVERBOUGHT``), signalling momentum
+           exhaustion.
+        3. **CCI** > ``config.CCI_OVERBOUGHT`` (default +100) — price is in
+           overbought territory on the Commodity Channel Index.
+        4. **ADX** > ``config.ADX_THRESHOLD`` (default 20) and −DI > +DI —
+           a trending market with downward directional bias.
+        5. **Kernel Filter** — current price < kernel-smoothed regression line,
+           indicating the trend direction has turned downward.
 
         Parameters
         ----------
@@ -1142,18 +1516,40 @@ class CryptoTrader:
         Returns
         -------
         bool
-            ``True`` when RSI > ``config.RSI_OVERBOUGHT``.
+            ``True`` when sell_score ≥ ``config.SELL_SIGNAL_THRESHOLD``.
         """
         indicators = self.get_indicators(symbol, timeframe)
-        rsi_overbought = indicators["rsi"] > config.RSI_OVERBOUGHT
+        price = indicators["price"]
+
+        rsi_bearish    = indicators["rsi"] > config.RSI_OVERBOUGHT
+        wt_bearish     = (
+            indicators["wt1"] < indicators["wt2"]
+            or indicators["wt1"] > config.WT_OVERBOUGHT
+        )
+        cci_bearish    = indicators["cci"] > config.CCI_OVERBOUGHT
+        adx_bearish    = (
+            indicators["adx"] > config.ADX_THRESHOLD
+            and indicators["minus_di"] > indicators["plus_di"]
+        )
+        kernel_bearish = price < indicators["kernel"]
+
+        sell_score = sum([rsi_bearish, wt_bearish, cci_bearish, adx_bearish, kernel_bearish])
+        signal = sell_score >= config.SELL_SIGNAL_THRESHOLD
 
         logger.info(
-            "should_sell %s — rsi=%.2f → rsi_overbought=%s",
+            "should_sell %s — rsi=%.2f(bear=%s) wt1=%.2f wt2=%.2f(bear=%s) "
+            "cci=%.2f(bear=%s) adx=%.2f +di=%.2f -di=%.2f(bear=%s) "
+            "kernel=%.4f(bear=%s) score=%d/%d → signal=%s",
             symbol,
-            indicators["rsi"],
-            rsi_overbought,
+            indicators["rsi"], rsi_bearish,
+            indicators["wt1"], indicators["wt2"], wt_bearish,
+            indicators["cci"], cci_bearish,
+            indicators["adx"], indicators["plus_di"], indicators["minus_di"], adx_bearish,
+            indicators["kernel"], kernel_bearish,
+            sell_score, config.SELL_SIGNAL_THRESHOLD,
+            signal,
         )
-        return rsi_overbought
+        return signal
 
     def get_holdings(self) -> dict:
         """
