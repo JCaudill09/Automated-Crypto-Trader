@@ -1061,7 +1061,7 @@ class TestShouldSell(unittest.TestCase):
             ind = _make_full_indicators(
                 price=100.0,
                 rsi=80.0,            # rsi_bearish: RSI > RSI_OVERBOUGHT(70)
-                wt1=60.0, wt2=50.0,  # wt_bearish: wt1 > wt2 AND wt1 > WT_OVERBOUGHT
+                wt1=60.0, wt2=50.0,  # wt_bearish: wt1 > WT_OVERBOUGHT(53)
                 cci=150.0,           # cci_bearish: CCI > CCI_OVERBOUGHT(100)
                 adx=30.0, plus_di=15.0, minus_di=35.0,  # adx_bearish: ADX>20, -DI > +DI
                 kernel=110.0,        # kernel_bearish: price(100) < kernel(110)

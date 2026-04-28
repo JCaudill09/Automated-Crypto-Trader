@@ -1545,7 +1545,7 @@ class CryptoTrader:
             indicators["wt1"], indicators["wt2"], wt_bearish,
             indicators["cci"], cci_bearish,
             indicators["adx"], indicators["plus_di"], indicators["minus_di"], adx_bearish,
-            price, kernel_bearish,
+            indicators["kernel"], kernel_bearish,
             sell_score, config.SELL_SIGNAL_THRESHOLD,
             signal,
         )
