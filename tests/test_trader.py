@@ -18,6 +18,55 @@ from main import is_stock_market_hours, get_tradeable_symbols
 _EST = ZoneInfo("America/New_York")
 
 
+def _make_full_indicators(
+    price=100.0,
+    rsi=50.0,
+    wt1=30.0,
+    wt2=35.0,
+    cci=50.0,
+    adx=15.0,
+    plus_di=30.0,
+    minus_di=15.0,
+    kernel=90.0,
+    bb_upper=None,
+    kc_upper=None,
+    rvol=None,
+) -> dict:
+    """Build a complete indicator dict suitable for mocking ``get_indicators``.
+
+    Defaults produce a **non-bullish, non-bearish** neutral state.  Override
+    individual fields to drive specific test scenarios.
+    """
+    if bb_upper is None:
+        bb_upper = price + 5.0   # price is below the upper band by default
+    if kc_upper is None:
+        kc_upper = price + 5.0
+    if rvol is None:
+        rvol = config.RVOL_THRESHOLD
+    return {
+        "price": price,
+        "vwap": price - 10.0,
+        "rsi": rsi,
+        "atr": 1.0,
+        "volume_profile_poc": price - 10.0,
+        "simple_algo_signal": True,
+        "bb_upper": bb_upper,
+        "bb_middle": bb_upper - 5.0,
+        "bb_lower": bb_upper - 10.0,
+        "kc_upper": kc_upper,
+        "kc_middle": kc_upper - 5.0,
+        "kc_lower": kc_upper - 10.0,
+        "rvol": rvol,
+        "wt1": wt1,
+        "wt2": wt2,
+        "cci": cci,
+        "adx": adx,
+        "plus_di": plus_di,
+        "minus_di": minus_di,
+        "kernel": kernel,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Test constants
 # ---------------------------------------------------------------------------
@@ -836,9 +885,12 @@ class TestGetIndicators(unittest.TestCase):
 
     def test_returns_expected_indicator_keys(self):
         result = self.trader.get_indicators(self.SYMBOL)
-        for key in ("price", "vwap", "rsi", "atr", "volume_profile_poc",
-                    "simple_algo_signal", "bb_upper", "bb_middle", "bb_lower",
-                    "kc_upper", "kc_middle", "kc_lower", "rvol"):
+        for key in (
+            "price", "vwap", "rsi", "atr", "volume_profile_poc",
+            "simple_algo_signal", "bb_upper", "bb_middle", "bb_lower",
+            "kc_upper", "kc_middle", "kc_lower", "rvol",
+            "wt1", "wt2", "cci", "adx", "plus_di", "minus_di", "kernel",
+        ):
             self.assertIn(key, result)
 
     def test_price_equals_last_close(self):
@@ -850,10 +902,16 @@ class TestGetIndicators(unittest.TestCase):
 
     def test_fetch_ohlcv_called_with_correct_limit(self):
         self.trader.get_indicators(self.SYMBOL, timeframe="4h")
+        wt_min = config.WT_CHANNEL_LENGTH + config.WT_AVERAGE_LENGTH + config.WT_MA_LENGTH
+        adx_min = 2 * config.ADX_PERIOD + 1
         expected_limit = max(
             config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10,
             config.BB_PERIOD + config.RVOL_PERIOD + 10,
             config.KC_PERIOD + config.RVOL_PERIOD + 10,
+            wt_min + 10,
+            adx_min + 10,
+            config.CCI_PERIOD + 10,
+            config.KERNEL_BANDWIDTH + 10,
         )
         self.trader.exchange.fetch_ohlcv.assert_called_once_with(
             self.SYMBOL, "4h", limit=expected_limit
@@ -870,20 +928,24 @@ class TestShouldBuy(unittest.TestCase):
     def _set_indicators(self, trader, price, vwap, rsi,
                         volume_profile_poc=None, simple_algo_signal=True,
                         quote_volume=None, bid=None, atr=1.0,
-                        rvol=None, bb_upper=None, kc_upper=None):
+                        rvol=None, bb_upper=None, kc_upper=None,
+                        wt1=10.0, wt2=5.0, cci=0.0,
+                        adx=25.0, plus_di=30.0, minus_di=15.0, kernel=None):
         """Patch get_indicators to return controlled values and set up a ticker mock.
 
-        Defaults produce a signal that fires: RVOL is 5× threshold, and price
-        is above both the Bollinger Band upper and Keltner Channel upper.
+        Defaults produce a signal that fires: RVOL is at threshold, price is
+        above both bands, and all five scored conditions are bullish
+        (score = 5 ≥ BUY_SIGNAL_THRESHOLD = 3).
         """
         poc = volume_profile_poc if volume_profile_poc is not None else price - 10.0
-        # Default: RVOL just meets threshold, price breaks above both bands
         if rvol is None:
             rvol = config.RVOL_THRESHOLD
         if bb_upper is None:
             bb_upper = price - 1.0   # price is above the upper band
         if kc_upper is None:
             kc_upper = price - 1.0   # price is above the upper channel
+        if kernel is None:
+            kernel = price - 5.0     # price >= kernel → bullish
         trader.get_indicators = MagicMock(
             return_value={
                 "price": price,
@@ -899,6 +961,13 @@ class TestShouldBuy(unittest.TestCase):
                 "kc_middle": kc_upper - 5.0,
                 "kc_lower": kc_upper - 10.0,
                 "rvol": rvol,
+                "wt1": wt1,
+                "wt2": wt2,
+                "cci": cci,
+                "adx": adx,
+                "plus_di": plus_di,
+                "minus_di": minus_di,
+                "kernel": kernel,
             }
         )
         trader.exchange.fetch_ticker.return_value = _make_ticker(
@@ -982,48 +1051,105 @@ class TestShouldBuy(unittest.TestCase):
 class TestShouldSell(unittest.TestCase):
     SYMBOL = "BTC/USD"
 
-    def _set_indicators(self, trader, rsi: float) -> None:
-        """Patch get_indicators to return a controlled RSI value."""
-        trader.get_indicators = MagicMock(
-            return_value={
-                "price": 100.0,
-                "vwap": 90.0,
-                "rsi": rsi,
-                "atr": 1.0,
-                "volume_profile_poc": 90.0,
-                "simple_algo_signal": True,
-            }
+    def _set_indicators(self, trader, *, all_bearish: bool = True) -> dict:
+        """Patch get_indicators with either all-bearish or all-non-bearish defaults.
+
+        all_bearish=True  → sell_score = 5 ≥ SELL_SIGNAL_THRESHOLD → signal fires.
+        all_bearish=False → sell_score = 0 < SELL_SIGNAL_THRESHOLD → signal is silent.
+        """
+        if all_bearish:
+            ind = _make_full_indicators(
+                price=100.0,
+                rsi=80.0,            # rsi_bearish: RSI > RSI_OVERBOUGHT(70)
+                wt1=60.0, wt2=50.0,  # wt_bearish: wt1 > wt2 AND wt1 > WT_OVERBOUGHT
+                cci=150.0,           # cci_bearish: CCI > CCI_OVERBOUGHT(100)
+                adx=30.0, plus_di=15.0, minus_di=35.0,  # adx_bearish: ADX>20, -DI > +DI
+                kernel=110.0,        # kernel_bearish: price(100) < kernel(110)
+            )
+        else:
+            ind = _make_full_indicators(
+                price=100.0,
+                rsi=50.0,            # not bearish: RSI ≤ RSI_OVERBOUGHT
+                wt1=30.0, wt2=35.0,  # not bearish: wt1 < wt2 AND wt1 < WT_OVERBOUGHT
+                cci=50.0,            # not bearish: CCI ≤ CCI_OVERBOUGHT
+                adx=15.0, plus_di=30.0, minus_di=15.0,  # not bearish: ADX < ADX_THRESHOLD
+                kernel=90.0,         # not bearish: price(100) >= kernel(90)
+            )
+        trader.get_indicators = MagicMock(return_value=ind)
+        return ind
+
+    def test_sell_signal_when_all_conditions_bearish(self):
+        """All 5 scored conditions bearish → sell_score = 5 ≥ threshold."""
+        trader = _make_trader()
+        self._set_indicators(trader, all_bearish=True)
+        self.assertTrue(trader.should_sell(self.SYMBOL))
+
+    def test_no_sell_signal_when_no_conditions_bearish(self):
+        """All 5 scored conditions non-bearish → sell_score = 0 < threshold."""
+        trader = _make_trader()
+        self._set_indicators(trader, all_bearish=False)
+        self.assertFalse(trader.should_sell(self.SYMBOL))
+
+    def test_sell_signal_at_exact_threshold(self):
+        """Exactly SELL_SIGNAL_THRESHOLD bearish conditions → signal fires."""
+        trader = _make_trader()
+        # 3 bearish: RSI + CCI + kernel; WT and ADX are not bearish
+        ind = _make_full_indicators(
+            price=100.0,
+            rsi=80.0,            # bearish
+            wt1=30.0, wt2=35.0,  # NOT bearish: wt1 < wt2, wt1 < WT_OVERBOUGHT
+            cci=150.0,           # bearish
+            adx=15.0, plus_di=30.0, minus_di=15.0,  # NOT bearish: ADX < threshold
+            kernel=110.0,        # bearish: price(100) < kernel(110)
         )
-
-    def test_sell_signal_when_rsi_above_overbought(self):
-        trader = _make_trader()
-        self._set_indicators(trader, rsi=75.0)
+        trader.get_indicators = MagicMock(return_value=ind)
         self.assertTrue(trader.should_sell(self.SYMBOL))
 
-    def test_no_sell_signal_when_rsi_below_overbought(self):
+    def test_no_sell_signal_one_below_threshold(self):
+        """Only 2 bearish conditions → sell_score = 2 < threshold."""
         trader = _make_trader()
-        self._set_indicators(trader, rsi=50.0)
+        ind = _make_full_indicators(
+            price=100.0,
+            rsi=80.0,            # bearish
+            wt1=35.0, wt2=30.0,  # NOT bearish: wt1 > wt2 AND wt1 < WT_OVERBOUGHT
+            cci=50.0,            # NOT bearish: CCI ≤ CCI_OVERBOUGHT
+            adx=15.0, plus_di=30.0, minus_di=15.0,  # NOT bearish: ADX < ADX_THRESHOLD
+            kernel=110.0,        # bearish: price(100) < kernel(110)
+        )
+        trader.get_indicators = MagicMock(return_value=ind)
         self.assertFalse(trader.should_sell(self.SYMBOL))
 
-    def test_no_sell_signal_when_rsi_equals_overbought_threshold(self):
-        # RSI must be *above* the threshold, not equal
+    def test_rsi_at_overbought_threshold_not_bearish(self):
+        """RSI exactly at RSI_OVERBOUGHT is NOT bearish (condition is strictly >)."""
         trader = _make_trader()
-        self._set_indicators(trader, rsi=config.RSI_OVERBOUGHT)
+        ind = _make_full_indicators(
+            price=100.0,
+            rsi=config.RSI_OVERBOUGHT,   # not bearish: RSI must be *above* threshold
+            wt1=30.0, wt2=35.0, cci=50.0,
+            adx=15.0, plus_di=30.0, minus_di=15.0,
+            kernel=90.0,
+        )
+        trader.get_indicators = MagicMock(return_value=ind)
         self.assertFalse(trader.should_sell(self.SYMBOL))
 
-    def test_sell_signal_at_rsi_100(self):
+    def test_wavetrend_overbought_contributes_to_sell_score(self):
+        """WT1 above WT_OVERBOUGHT triggers wt_bearish even when WT1 > WT2."""
         trader = _make_trader()
-        self._set_indicators(trader, rsi=100.0)
-        self.assertTrue(trader.should_sell(self.SYMBOL))
-
-    def test_no_sell_signal_when_rsi_just_below_threshold(self):
-        trader = _make_trader()
-        self._set_indicators(trader, rsi=config.RSI_OVERBOUGHT - 0.01)
-        self.assertFalse(trader.should_sell(self.SYMBOL))
+        ind = _make_full_indicators(
+            price=100.0,
+            rsi=80.0,                         # bearish
+            wt1=config.WT_OVERBOUGHT + 1.0,   # bearish: WT1 > WT_OVERBOUGHT
+            wt2=config.WT_OVERBOUGHT - 10.0,
+            cci=150.0,                        # bearish
+            adx=15.0, plus_di=30.0, minus_di=15.0,  # NOT bearish
+            kernel=90.0,                             # NOT bearish
+        )
+        trader.get_indicators = MagicMock(return_value=ind)
+        self.assertTrue(trader.should_sell(self.SYMBOL))  # score = 3
 
     def test_should_sell_returns_bool(self):
         trader = _make_trader()
-        self._set_indicators(trader, rsi=80.0)
+        self._set_indicators(trader, all_bearish=True)
         self.assertIsInstance(trader.should_sell(self.SYMBOL), bool)
 
 
@@ -1192,24 +1318,20 @@ class TestVolumeIntegration(unittest.TestCase):
     # --- should_buy() ---
 
     def _bullish_indicators(self, trader):
-        """Patch get_indicators so the technical conditions fire."""
+        """Patch get_indicators so all technical conditions fire for a buy signal."""
         price = 110.0
         trader.get_indicators = MagicMock(
-            return_value={
-                "price": price,
-                "vwap": 100.0,
-                "atr": 1.0,
-                "volume_profile_poc": 100.0,
-                "simple_algo_signal": True,
-                "rsi": 25.0,
-                "bb_upper": price - 1.0,
-                "bb_middle": price - 6.0,
-                "bb_lower": price - 11.0,
-                "kc_upper": price - 1.0,
-                "kc_middle": price - 6.0,
-                "kc_lower": price - 11.0,
-                "rvol": config.RVOL_THRESHOLD,
-            }
+            return_value=_make_full_indicators(
+                price=price,
+                rsi=25.0,                # bullish: RSI < RSI_OVERSOLD(50)
+                wt1=10.0, wt2=5.0,       # bullish: wt1 > wt2, wt1 < WT_OVERBOUGHT
+                cci=0.0,                 # bullish: CCI > CCI_OVERSOLD(-100)
+                adx=25.0, plus_di=30.0, minus_di=15.0,  # bullish
+                kernel=price - 5.0,      # bullish: price >= kernel
+                bb_upper=price - 1.0,    # price above BB upper → breakout
+                kc_upper=price - 1.0,    # price above KC upper → breakout
+                rvol=config.RVOL_THRESHOLD,
+            )
         )
 
     def test_should_buy_false_when_volume_insufficient(self):
@@ -1302,21 +1424,16 @@ class TestCheckSpread(unittest.TestCase):
             price, bid=price * (1.0 - 0.015)  # 1.5 % spread
         )
         trader.get_indicators = MagicMock(
-            return_value={
-                "price": price,
-                "vwap": 100.0,
-                "atr": 1.0,
-                "volume_profile_poc": 100.0,
-                "simple_algo_signal": True,
-                "rsi": 25.0,
-                "bb_upper": price - 1.0,
-                "bb_middle": price - 6.0,
-                "bb_lower": price - 11.0,
-                "kc_upper": price - 1.0,
-                "kc_middle": price - 6.0,
-                "kc_lower": price - 11.0,
-                "rvol": config.RVOL_THRESHOLD,
-            }
+            return_value=_make_full_indicators(
+                price=price,
+                rsi=25.0,
+                wt1=10.0, wt2=5.0, cci=0.0,
+                adx=25.0, plus_di=30.0, minus_di=15.0,
+                kernel=price - 5.0,
+                bb_upper=price - 1.0,
+                kc_upper=price - 1.0,
+                rvol=config.RVOL_THRESHOLD,
+            )
         )
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
@@ -1930,8 +2047,399 @@ if __name__ == "__main__":
 
 
 # ---------------------------------------------------------------------------
-# Trading schedule tests
+# WaveTrend computation tests
 # ---------------------------------------------------------------------------
+
+def _make_wt_ohlcv(n: int, price: float = 100.0) -> list:
+    """Build OHLCV candles with a constant typical price for WaveTrend tests."""
+    return [[0, price, price, price, price, 1000.0] for _ in range(n)]
+
+
+class TestComputeWaveTrend(unittest.TestCase):
+    _N1, _N2, _MA = 10, 21, 4
+    _MIN_CANDLES = _N1 + _N2 + _MA  # 35
+
+    def test_returns_expected_keys(self):
+        ohlcv = _make_wt_ohlcv(self._MIN_CANDLES + 5)
+        result = CryptoTrader._compute_wavetrend(ohlcv, self._N1, self._N2, self._MA)
+        self.assertIn("wt1", result)
+        self.assertIn("wt2", result)
+
+    def test_constant_price_returns_finite_values(self):
+        # All HLC3 values are identical → normalised deviation is zero → WT ≈ 0
+        ohlcv = _make_wt_ohlcv(self._MIN_CANDLES + 10)
+        result = CryptoTrader._compute_wavetrend(ohlcv, self._N1, self._N2, self._MA)
+        self.assertTrue(abs(result["wt1"]) < 1e-6)
+        self.assertTrue(abs(result["wt2"]) < 1e-6)
+
+    def test_rising_prices_produce_positive_wt1(self):
+        n = self._MIN_CANDLES + 50
+        prices = [float(i) for i in range(1, n + 1)]
+        ohlcv = [[0, p, p, p, p, 1000.0] for p in prices]
+        result = CryptoTrader._compute_wavetrend(ohlcv, self._N1, self._N2, self._MA)
+        self.assertGreater(result["wt1"], 0.0)
+
+    def test_falling_prices_produce_negative_wt1(self):
+        n = self._MIN_CANDLES + 50
+        prices = [float(i) for i in range(n, 0, -1)]
+        ohlcv = [[0, p, p, p, p, 1000.0] for p in prices]
+        result = CryptoTrader._compute_wavetrend(ohlcv, self._N1, self._N2, self._MA)
+        self.assertLess(result["wt1"], 0.0)
+
+    def test_raises_when_too_few_candles(self):
+        ohlcv = _make_wt_ohlcv(self._MIN_CANDLES - 1)
+        with self.assertRaises(ValueError):
+            CryptoTrader._compute_wavetrend(ohlcv, self._N1, self._N2, self._MA)
+
+    def test_wt2_is_sma_of_recent_wt1(self):
+        # For a constant-price series WT1 values are all ~0, so WT2 should be ~0 too
+        ohlcv = _make_wt_ohlcv(self._MIN_CANDLES + 10)
+        result = CryptoTrader._compute_wavetrend(ohlcv, self._N1, self._N2, self._MA)
+        self.assertAlmostEqual(result["wt2"], result["wt1"], delta=1e-6)
+
+    def test_returns_floats(self):
+        ohlcv = _make_wt_ohlcv(self._MIN_CANDLES + 5)
+        result = CryptoTrader._compute_wavetrend(ohlcv, self._N1, self._N2, self._MA)
+        self.assertIsInstance(result["wt1"], float)
+        self.assertIsInstance(result["wt2"], float)
+
+
+# ---------------------------------------------------------------------------
+# CCI computation tests
+# ---------------------------------------------------------------------------
+
+class TestComputeCCI(unittest.TestCase):
+    _PERIOD = 20
+
+    def _flat_ohlcv(self, n: int, price: float = 100.0) -> list:
+        return [[0, price, price, price, price, 1000.0] for _ in range(n)]
+
+    def test_constant_price_returns_zero(self):
+        # All typical prices equal → mean deviation = 0 → CCI = 0
+        ohlcv = self._flat_ohlcv(self._PERIOD)
+        self.assertAlmostEqual(CryptoTrader._compute_cci(ohlcv, self._PERIOD), 0.0)
+
+    def test_price_spike_produces_large_positive_cci(self):
+        # Price has been 100 for 19 candles, then spikes to 200
+        ohlcv = self._flat_ohlcv(self._PERIOD - 1) + [
+            [0, 200.0, 200.0, 200.0, 200.0, 1000.0]
+        ]
+        cci = CryptoTrader._compute_cci(ohlcv, self._PERIOD)
+        self.assertGreater(cci, 0.0)
+
+    def test_price_drop_produces_large_negative_cci(self):
+        # Price has been 200 for 19 candles, then drops to 100
+        ohlcv = self._flat_ohlcv(self._PERIOD - 1, price=200.0) + [
+            [0, 100.0, 100.0, 100.0, 100.0, 1000.0]
+        ]
+        cci = CryptoTrader._compute_cci(ohlcv, self._PERIOD)
+        self.assertLess(cci, 0.0)
+
+    def test_raises_when_too_few_candles(self):
+        ohlcv = self._flat_ohlcv(self._PERIOD - 1)
+        with self.assertRaises(ValueError):
+            CryptoTrader._compute_cci(ohlcv, self._PERIOD)
+
+    def test_uses_only_last_period_candles(self):
+        # Prepend candles with extreme prices; only the last *period* candles should matter
+        prefix = self._flat_ohlcv(10, price=9999.0)
+        suffix = self._flat_ohlcv(self._PERIOD, price=100.0)
+        cci_with_prefix = CryptoTrader._compute_cci(prefix + suffix, self._PERIOD)
+        cci_no_prefix = CryptoTrader._compute_cci(suffix, self._PERIOD)
+        self.assertAlmostEqual(cci_with_prefix, cci_no_prefix, places=6)
+
+    def test_returns_float(self):
+        ohlcv = self._flat_ohlcv(self._PERIOD)
+        self.assertIsInstance(CryptoTrader._compute_cci(ohlcv, self._PERIOD), float)
+
+    def test_above_100_on_strong_uptrend(self):
+        # A linearly rising series should push CCI above +100
+        prices = [float(i) for i in range(1, self._PERIOD + 1)]
+        ohlcv = [[0, p, p, p, p, 1000.0] for p in prices]
+        cci = CryptoTrader._compute_cci(ohlcv, self._PERIOD)
+        self.assertGreater(cci, 100.0)
+
+    def test_below_minus_100_on_strong_downtrend(self):
+        prices = [float(i) for i in range(self._PERIOD, 0, -1)]
+        ohlcv = [[0, p, p, p, p, 1000.0] for p in prices]
+        cci = CryptoTrader._compute_cci(ohlcv, self._PERIOD)
+        self.assertLess(cci, -100.0)
+
+
+# ---------------------------------------------------------------------------
+# ADX computation tests
+# ---------------------------------------------------------------------------
+
+class TestComputeADX(unittest.TestCase):
+    _PERIOD = 14
+    _MIN_CANDLES = 2 * _PERIOD + 1  # 29
+
+    def _uptrend_ohlcv(self, n: int) -> list:
+        """Build a rising series with separating high/low to generate +DM."""
+        candles = []
+        price = 100.0
+        for _ in range(n):
+            candles.append([0, price, price + 5.0, price - 2.0, price, 1000.0])
+            price += 1.0
+        return candles
+
+    def _downtrend_ohlcv(self, n: int) -> list:
+        """Build a falling series with separating high/low to generate -DM."""
+        candles = []
+        price = 200.0
+        for _ in range(n):
+            candles.append([0, price, price + 2.0, price - 5.0, price, 1000.0])
+            price -= 1.0
+        return candles
+
+    def test_returns_expected_keys(self):
+        ohlcv = self._uptrend_ohlcv(self._MIN_CANDLES + 5)
+        result = CryptoTrader._compute_adx(ohlcv, self._PERIOD)
+        for key in ("adx", "plus_di", "minus_di"):
+            self.assertIn(key, result)
+
+    def test_adx_is_positive_in_trending_market(self):
+        ohlcv = self._uptrend_ohlcv(self._MIN_CANDLES + 20)
+        result = CryptoTrader._compute_adx(ohlcv, self._PERIOD)
+        self.assertGreater(result["adx"], 0.0)
+
+    def test_adx_between_0_and_100(self):
+        ohlcv = self._uptrend_ohlcv(self._MIN_CANDLES + 20)
+        result = CryptoTrader._compute_adx(ohlcv, self._PERIOD)
+        self.assertGreaterEqual(result["adx"], 0.0)
+        self.assertLessEqual(result["adx"], 100.0)
+
+    def test_plus_di_greater_in_uptrend(self):
+        ohlcv = self._uptrend_ohlcv(self._MIN_CANDLES + 30)
+        result = CryptoTrader._compute_adx(ohlcv, self._PERIOD)
+        self.assertGreater(result["plus_di"], result["minus_di"])
+
+    def test_minus_di_greater_in_downtrend(self):
+        ohlcv = self._downtrend_ohlcv(self._MIN_CANDLES + 30)
+        result = CryptoTrader._compute_adx(ohlcv, self._PERIOD)
+        self.assertGreater(result["minus_di"], result["plus_di"])
+
+    def test_raises_when_too_few_candles(self):
+        ohlcv = self._uptrend_ohlcv(self._MIN_CANDLES - 1)
+        with self.assertRaises(ValueError):
+            CryptoTrader._compute_adx(ohlcv, self._PERIOD)
+
+    def test_returns_floats(self):
+        ohlcv = self._uptrend_ohlcv(self._MIN_CANDLES + 5)
+        result = CryptoTrader._compute_adx(ohlcv, self._PERIOD)
+        for key in ("adx", "plus_di", "minus_di"):
+            self.assertIsInstance(result[key], float)
+
+
+# ---------------------------------------------------------------------------
+# Kernel Filter computation tests
+# ---------------------------------------------------------------------------
+
+class TestComputeKernelFilter(unittest.TestCase):
+    _BW = 8
+
+    def test_constant_prices_return_that_price(self):
+        closes = [100.0] * self._BW
+        kernel = CryptoTrader._compute_kernel_filter(closes, self._BW)
+        self.assertAlmostEqual(kernel, 100.0, places=6)
+
+    def test_most_recent_price_has_highest_weight(self):
+        # Spike at the last price; the kernel result should be pulled toward it
+        closes = [50.0] * (self._BW - 1) + [200.0]
+        kernel = CryptoTrader._compute_kernel_filter(closes, self._BW)
+        self.assertGreater(kernel, 50.0)
+        self.assertLess(kernel, 200.0)
+
+    def test_rising_series_returns_value_below_last_price(self):
+        # The kernel weighted average is pulled by all prior prices, so it
+        # lags behind a rising series → kernel value < last close
+        closes = list(range(100, 100 + self._BW))
+        kernel = CryptoTrader._compute_kernel_filter(closes, self._BW)
+        self.assertLess(kernel, closes[-1])
+
+    def test_raises_when_too_few_closes(self):
+        with self.assertRaises(ValueError):
+            CryptoTrader._compute_kernel_filter([100.0] * (self._BW - 1), self._BW)
+
+    def test_returns_float(self):
+        closes = [100.0] * self._BW
+        self.assertIsInstance(CryptoTrader._compute_kernel_filter(closes, self._BW), float)
+
+    def test_kernel_within_price_range(self):
+        import random
+        random.seed(7)
+        closes = [100.0 + random.uniform(-10, 10) for _ in range(self._BW)]
+        kernel = CryptoTrader._compute_kernel_filter(closes, self._BW)
+        self.assertGreaterEqual(kernel, min(closes))
+        self.assertLessEqual(kernel, max(closes))
+
+
+# ---------------------------------------------------------------------------
+# Comprehensive buy signal tests
+# ---------------------------------------------------------------------------
+
+class TestComprehensiveBuySignal(unittest.TestCase):
+    SYMBOL = "BTC/USD"
+
+    def _trader_with_indicators(self, **kwargs):
+        """Build a trader whose get_indicators returns the given overrides."""
+        price = kwargs.pop("price", 110.0)
+        # Default: fully bullish indicators + breakout + RVOL
+        defaults = dict(
+            price=price,
+            rsi=25.0,
+            wt1=10.0, wt2=5.0,
+            cci=0.0,
+            adx=25.0, plus_di=30.0, minus_di=15.0,
+            kernel=price - 5.0,
+            bb_upper=price - 1.0,
+            kc_upper=price - 1.0,
+            rvol=config.RVOL_THRESHOLD,
+        )
+        defaults.update(kwargs)
+        trader = _make_trader()
+        trader.exchange.fetch_ticker.return_value = _make_ticker(price)
+        trader.get_indicators = MagicMock(
+            return_value=_make_full_indicators(**defaults)
+        )
+        return trader
+
+    def test_buy_fires_when_all_conditions_met(self):
+        # score = 5, RVOL at threshold, breakout active → signal fires
+        trader = self._trader_with_indicators()
+        self.assertTrue(trader.should_buy(self.SYMBOL))
+
+    def test_buy_fires_at_exactly_score_threshold(self):
+        # 3 bullish indicators: RSI + CCI + kernel; WT and ADX are not bullish
+        trader = self._trader_with_indicators(
+            wt1=5.0, wt2=10.0,                          # NOT bullish: wt1 < wt2
+            adx=15.0, plus_di=30.0, minus_di=15.0,     # NOT bullish: ADX < threshold
+        )
+        self.assertTrue(trader.should_buy(self.SYMBOL))  # score = 3
+
+    def test_no_buy_when_score_below_threshold(self):
+        # Only 2 bullish: RSI + kernel; WT, CCI, ADX not bullish
+        trader = self._trader_with_indicators(
+            wt1=5.0, wt2=10.0,                          # NOT bullish
+            cci=config.CCI_OVERSOLD - 1.0,               # NOT bullish: CCI ≤ CCI_OVERSOLD
+            adx=15.0, plus_di=15.0, minus_di=30.0,      # NOT bullish
+        )
+        self.assertFalse(trader.should_buy(self.SYMBOL))  # score = 2
+
+    def test_no_buy_when_rvol_below_threshold(self):
+        # All 5 indicators bullish but RVOL gate fails
+        trader = self._trader_with_indicators(rvol=config.RVOL_THRESHOLD - 0.01)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_no_buy_when_no_breakout(self):
+        # All 5 indicators bullish and RVOL passes, but price below both bands
+        price = 110.0
+        trader = self._trader_with_indicators(
+            bb_upper=price + 5.0,   # price < BB upper
+            kc_upper=price + 5.0,   # price < KC upper
+        )
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_buy_fires_when_only_bb_breakout(self):
+        # Price above BB upper only (below KC upper): breakout gate passes
+        price = 110.0
+        trader = self._trader_with_indicators(
+            bb_upper=price - 1.0,   # price > BB upper
+            kc_upper=price + 5.0,   # price < KC upper
+        )
+        self.assertTrue(trader.should_buy(self.SYMBOL))
+
+    def test_buy_fires_when_only_kc_breakout(self):
+        # Price above KC upper only: breakout gate passes
+        price = 110.0
+        trader = self._trader_with_indicators(
+            bb_upper=price + 5.0,   # price < BB upper
+            kc_upper=price - 1.0,   # price > KC upper
+        )
+        self.assertTrue(trader.should_buy(self.SYMBOL))
+
+    def test_adx_bullish_requires_plus_di_greater_than_minus_di(self):
+        # ADX above threshold but -DI > +DI → adx_bullish = False
+        trader = self._trader_with_indicators(
+            adx=30.0, plus_di=15.0, minus_di=35.0,  # ADX strong but bearish direction
+            # Remove 2 other bullish conditions so total score < threshold
+            wt1=5.0, wt2=10.0,                       # NOT bullish
+            cci=config.CCI_OVERSOLD - 1.0,            # NOT bullish
+        )
+        self.assertFalse(trader.should_buy(self.SYMBOL))  # score = 2
+
+    def test_kernel_bearish_reduces_score(self):
+        # price < kernel → kernel_bullish = False; if only 2 others remain → no signal
+        price = 110.0
+        trader = self._trader_with_indicators(
+            kernel=price + 5.0,                  # NOT bullish: price < kernel
+            wt1=5.0, wt2=10.0,                   # NOT bullish
+            cci=config.CCI_OVERSOLD - 1.0,        # NOT bullish
+        )
+        self.assertFalse(trader.should_buy(self.SYMBOL))  # score = 2
+
+    def test_wavetrend_overbought_is_not_bullish(self):
+        # WT1 above WT_OVERBOUGHT → wt_bullish = False (close to peak, not entry signal)
+        trader = self._trader_with_indicators(
+            wt1=config.WT_OVERBOUGHT + 1.0, wt2=config.WT_OVERBOUGHT - 5.0,
+            # Compensate: keep score >= 3 via RSI, CCI, ADX, kernel
+        )
+        # score = 4 (rsi, cci, adx, kernel bullish; wt not bullish) ≥ threshold=3 → True
+        self.assertTrue(trader.should_buy(self.SYMBOL))
+
+    def test_buy_does_not_fire_with_zero_score(self):
+        price = 110.0
+        trader = self._trader_with_indicators(
+            rsi=config.RSI_OVERSOLD + 10.0,             # NOT bullish: RSI ≥ RSI_OVERSOLD
+            wt1=5.0, wt2=10.0,                          # NOT bullish
+            cci=config.CCI_OVERSOLD - 1.0,               # NOT bullish
+            adx=15.0, plus_di=15.0, minus_di=30.0,      # NOT bullish
+            kernel=price + 5.0,                          # NOT bullish
+        )
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+
+# ---------------------------------------------------------------------------
+# Config settings for new indicators
+# ---------------------------------------------------------------------------
+
+class TestNewIndicatorConfig(unittest.TestCase):
+    def test_wt_channel_length_positive(self):
+        self.assertGreater(config.WT_CHANNEL_LENGTH, 0)
+
+    def test_wt_average_length_positive(self):
+        self.assertGreater(config.WT_AVERAGE_LENGTH, 0)
+
+    def test_wt_ma_length_positive(self):
+        self.assertGreater(config.WT_MA_LENGTH, 0)
+
+    def test_wt_overbought_above_oversold(self):
+        self.assertGreater(config.WT_OVERBOUGHT, config.WT_OVERSOLD)
+
+    def test_cci_period_positive(self):
+        self.assertGreater(config.CCI_PERIOD, 0)
+
+    def test_cci_overbought_above_oversold(self):
+        self.assertGreater(config.CCI_OVERBOUGHT, config.CCI_OVERSOLD)
+
+    def test_adx_period_positive(self):
+        self.assertGreater(config.ADX_PERIOD, 0)
+
+    def test_adx_threshold_positive(self):
+        self.assertGreater(config.ADX_THRESHOLD, 0)
+
+    def test_kernel_bandwidth_positive(self):
+        self.assertGreater(config.KERNEL_BANDWIDTH, 0)
+
+    def test_buy_signal_threshold_between_1_and_5(self):
+        self.assertGreaterEqual(config.BUY_SIGNAL_THRESHOLD, 1)
+        self.assertLessEqual(config.BUY_SIGNAL_THRESHOLD, 5)
+
+    def test_sell_signal_threshold_between_1_and_5(self):
+        self.assertGreaterEqual(config.SELL_SIGNAL_THRESHOLD, 1)
+        self.assertLessEqual(config.SELL_SIGNAL_THRESHOLD, 5)
+
+
 
 def _est(year: int, month: int, day: int, hour: int, minute: int) -> datetime.datetime:
     """Build a timezone-aware datetime in Eastern Time."""

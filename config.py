@@ -49,6 +49,32 @@ BB_NUM_STD = 2.0  # Number of standard deviations for the upper/lower bands
 KC_PERIOD     = 20   # EMA period and ATR period for Keltner Channels
 KC_MULTIPLIER = 2.0  # Upper/lower channel distance = KC_MULTIPLIER × ATR
 
+# WaveTrend oscillator settings
+WT_CHANNEL_LENGTH = 10   # EMA period for smoothing the HLC3 channel (n1)
+WT_AVERAGE_LENGTH = 21   # EMA period for the final WaveTrend signal line (n2)
+WT_MA_LENGTH      = 4    # SMA period used to derive the trigger line (WT2)
+WT_OVERSOLD       = -53  # WT1 below this level is considered oversold
+WT_OVERBOUGHT     = 53   # WT1 above this level is considered overbought
+
+# CCI (Commodity Channel Index) settings
+CCI_PERIOD     = 20    # Look-back period for CCI computation
+CCI_OVERSOLD   = -100  # CCI below this level is considered oversold (buy zone)
+CCI_OVERBOUGHT = 100   # CCI above this level is considered overbought (sell zone)
+
+# ADX (Average Directional Index) settings
+ADX_PERIOD    = 14  # Wilder smoothing period for ATR, +DM, -DM, and ADX
+ADX_THRESHOLD = 20  # Minimum ADX value required to confirm a trending market
+
+# Kernel Filter (Rational Quadratic) settings
+# Smooths price using a kernel-weighted regression to identify the trend direction.
+KERNEL_BANDWIDTH = 8  # Lookback bandwidth (h) for the kernel regression
+
+# Comprehensive signal scoring thresholds
+# Each of the five indicators (RSI, WT, CCI, ADX, Kernel) contributes one point.
+# A signal fires when the score meets or exceeds the corresponding threshold.
+BUY_SIGNAL_THRESHOLD  = 3  # Min bullish indicator count required for a buy  (out of 5)
+SELL_SIGNAL_THRESHOLD = 3  # Min bearish indicator count required for a sell (out of 5)
+
 # Relative Volume (RVOL) settings
 # RVOL = current candle volume / average volume over the preceding RVOL_PERIOD candles.
 # A high RVOL indicates that the current candle is seeing unusually heavy participation.
