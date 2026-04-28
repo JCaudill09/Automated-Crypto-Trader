@@ -1,9 +1,8 @@
 """
 Configuration settings for the Automated Crypto Trader.
 
-Kraken supports trading of cryptocurrencies, tokenized stocks, and ETFs.
-All three asset classes use USD-quoted pairs (e.g. ``"BTC/USD"``,
-``"AAPL/USD"``, ``"SPY/USD"``) and are handled uniformly by the trader.
+Kraken supports trading of cryptocurrencies via USD-quoted pairs
+(e.g. ``"BTC/USD"``, ``"ETH/USD"``).
 """
 
 # Order size limits (in USD)
@@ -13,8 +12,8 @@ MAX_BUY_ORDER = 78.0   # Maximum buy order amount in USD
 # Default exchange to use (must be supported by ccxt)
 DEFAULT_EXCHANGE = "kraken"
 
-# Default trading pairs to monitor (crypto, stocks, and ETFs are all supported)
-DEFAULT_SYMBOLS = ["BTC/USD", "ETH/USD", "AAPL/USD", "SPY/USD"]
+# Default crypto trading pairs to monitor
+DEFAULT_SYMBOLS = ["BTC/USD", "ETH/USD"]
 
 # Paper trading mode — when True, no real orders are placed
 PAPER_TRADING = False
@@ -88,8 +87,7 @@ VOLUME_PROFILE_BINS = 50  # Number of equal-width price bins for the volume prof
 # ccxt market dicts carry a ``type`` field (e.g. ``"spot"``, ``"swap"``,
 # ``"future"``).  Set this to a list of strings to restrict which types are
 # returned by ``get_usd_symbols()``.  ``None`` (the default) disables
-# type-filtering so every active USD pair is included — cryptocurrencies,
-# tokenized stocks, and ETFs alike.
+# type-filtering so every active USD crypto pair is included.
 # Examples:
 #   ASSET_TYPES = ["spot"]         # spot markets only
 #   ASSET_TYPES = None             # no filter — include all market types
@@ -112,38 +110,15 @@ MAX_BID_ASK_SPREAD_PCT = 0.0075  # 0.75 %
 # Order bundles
 # ---------------------------------------------------------------------------
 
-# Named groups of USD-quoted symbols that can be bought together in one call
-# via CryptoTrader.buy_bundle().  Add, remove, or rename bundles freely.
+# Named groups of USD-quoted crypto symbols that can be bought together in one
+# call via CryptoTrader.buy_bundle().  Add, remove, or rename bundles freely.
 BUNDLES: dict = {
     "large_caps": ["BTC/USD", "ETH/USD"],
     "defi":       ["LINK/USD", "UNI/USD", "AAVE/USD"],
     "layer1":     ["SOL/USD", "ADA/USD", "DOT/USD"],
-    # Tokenized stocks available on Kraken
-    "stocks":     ["AAPL/USD", "TSLA/USD", "MSFT/USD", "NVDA/USD", "AMZN/USD"],
-    # ETFs available on Kraken
-    "etfs":       ["SPY/USD", "QQQ/USD", "VOO/USD"],
 }
 
 # When True the main trading loop uses bundle-based buying: a buy signal for
 # any symbol that belongs to a bundle triggers a buy for the entire bundle.
 # When False (default) the loop behaves exactly as before — single symbols.
 USE_BUNDLES = False
-
-# ---------------------------------------------------------------------------
-# Trading schedule
-# ---------------------------------------------------------------------------
-
-# When True the bot routes symbols based on the time of day:
-#   • NYSE/Nasdaq hours (Mon–Fri 09:30–16:00 ET) → trade only STOCK_SYMBOLS
-#   • All other times                             → trade only non-STOCK_SYMBOLS (crypto)
-# Set to False to disable time-based routing and trade all symbols at all times.
-TRADING_SCHEDULE_ENABLED = True
-
-# Symbols treated as stocks or ETFs for schedule-based routing.
-# Any symbol NOT in this list is treated as crypto.
-STOCK_SYMBOLS: list = [
-    # Tokenized stocks available on Kraken
-    "AAPL/USD", "TSLA/USD", "MSFT/USD", "NVDA/USD", "AMZN/USD",
-    # ETFs available on Kraken
-    "SPY/USD", "QQQ/USD", "VOO/USD",
-]
