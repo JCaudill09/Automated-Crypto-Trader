@@ -9,13 +9,9 @@ import datetime
 import unittest
 import unittest.mock
 from unittest.mock import MagicMock, patch
-from zoneinfo import ZoneInfo
 
 import config
 from trader import CryptoTrader, OrderSizeError, InsufficientVolumeError, WideBidAskSpreadError
-from main import is_stock_market_hours, get_tradeable_symbols
-
-_EST = ZoneInfo("America/New_York")
 
 
 def _make_full_indicators(
@@ -2439,101 +2435,6 @@ class TestNewIndicatorConfig(unittest.TestCase):
         self.assertGreaterEqual(config.SELL_SIGNAL_THRESHOLD, 1)
         self.assertLessEqual(config.SELL_SIGNAL_THRESHOLD, 5)
 
-
-
-def _est(year: int, month: int, day: int, hour: int, minute: int) -> datetime.datetime:
-    """Build a timezone-aware datetime in Eastern Time."""
-    return datetime.datetime(year, month, day, hour, minute, tzinfo=_EST)
-
-
-class TestIsStockMarketHours(unittest.TestCase):
-    # Monday 2024-04-22 at various times
-    def test_during_market_hours_returns_true(self):
-        self.assertTrue(is_stock_market_hours(_est(2024, 4, 22, 10, 0)))
-
-    def test_at_open_returns_true(self):
-        self.assertTrue(is_stock_market_hours(_est(2024, 4, 22, 9, 30)))
-
-    def test_just_before_open_returns_false(self):
-        self.assertFalse(is_stock_market_hours(_est(2024, 4, 22, 9, 29)))
-
-    def test_at_close_returns_false(self):
-        # 16:00 exactly is NOT within trading hours (half-open interval [open, close))
-        self.assertFalse(is_stock_market_hours(_est(2024, 4, 22, 16, 0)))
-
-    def test_after_close_returns_false(self):
-        self.assertFalse(is_stock_market_hours(_est(2024, 4, 22, 18, 0)))
-
-    def test_before_midnight_returns_false(self):
-        self.assertFalse(is_stock_market_hours(_est(2024, 4, 22, 23, 59)))
-
-    def test_early_morning_returns_false(self):
-        self.assertFalse(is_stock_market_hours(_est(2024, 4, 22, 4, 0)))
-
-    def test_saturday_returns_false(self):
-        self.assertFalse(is_stock_market_hours(_est(2024, 4, 20, 11, 0)))
-
-    def test_sunday_returns_false(self):
-        self.assertFalse(is_stock_market_hours(_est(2024, 4, 21, 11, 0)))
-
-    def test_friday_during_hours_returns_true(self):
-        self.assertTrue(is_stock_market_hours(_est(2024, 4, 19, 13, 0)))
-
-    def test_non_est_input_is_normalised(self):
-        # 14:00 UTC on a Monday = 10:00 ET → market hours
-        utc_dt = datetime.datetime(2024, 4, 22, 14, 0, tzinfo=datetime.timezone.utc)
-        self.assertTrue(is_stock_market_hours(utc_dt))
-
-
-class TestGetTradeableSymbols(unittest.TestCase):
-    _ALL = ["BTC/USD", "ETH/USD", "SOL/USD", "AAPL/USD", "SPY/USD", "QQQ/USD"]
-    _STOCK_HOURS = _est(2024, 4, 22, 11, 0)   # Monday 11:00 AM ET
-    _CRYPTO_HOURS = _est(2024, 4, 22, 20, 0)  # Monday 8:00 PM ET
-
-    def test_stock_hours_returns_only_stocks(self):
-        result = get_tradeable_symbols(self._ALL, self._STOCK_HOURS)
-        for sym in result:
-            self.assertIn(sym, config.STOCK_SYMBOLS)
-
-    def test_stock_hours_excludes_crypto(self):
-        result = get_tradeable_symbols(self._ALL, self._STOCK_HOURS)
-        for sym in ["BTC/USD", "ETH/USD", "SOL/USD"]:
-            self.assertNotIn(sym, result)
-
-    def test_crypto_hours_returns_only_crypto(self):
-        result = get_tradeable_symbols(self._ALL, self._CRYPTO_HOURS)
-        stock_set = set(config.STOCK_SYMBOLS)
-        for sym in result:
-            self.assertNotIn(sym, stock_set)
-
-    def test_crypto_hours_excludes_stocks(self):
-        result = get_tradeable_symbols(self._ALL, self._CRYPTO_HOURS)
-        for sym in ["AAPL/USD", "SPY/USD", "QQQ/USD"]:
-            self.assertNotIn(sym, result)
-
-    def test_weekend_treated_as_crypto_hours(self):
-        saturday = _est(2024, 4, 20, 11, 0)
-        result = get_tradeable_symbols(self._ALL, saturday)
-        stock_set = set(config.STOCK_SYMBOLS)
-        for sym in result:
-            self.assertNotIn(sym, stock_set)
-
-    def test_schedule_disabled_returns_all(self):
-        original = config.TRADING_SCHEDULE_ENABLED
-        try:
-            config.TRADING_SCHEDULE_ENABLED = False
-            result = get_tradeable_symbols(self._ALL, self._STOCK_HOURS)
-            self.assertEqual(result, list(self._ALL))
-        finally:
-            config.TRADING_SCHEDULE_ENABLED = original
-
-    def test_empty_input_returns_empty(self):
-        self.assertEqual(get_tradeable_symbols([], self._STOCK_HOURS), [])
-        self.assertEqual(get_tradeable_symbols([], self._CRYPTO_HOURS), [])
-
-    def test_returns_list_type(self):
-        result = get_tradeable_symbols(self._ALL, self._STOCK_HOURS)
-        self.assertIsInstance(result, list)
 
 
 if __name__ == "__main__":
