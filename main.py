@@ -190,7 +190,27 @@ def main():
                             sell_order.get("price"),
                         )
                         del positions[symbol]
-                    # RSI-based take-profit exit (overbought signal)
+                    # Price-based take-profit / stop-loss — always checked first,
+                    # independent of any indicator signals.
+                    elif bot.check_exit(symbol, entry_price) == "take_profit":
+                        for oid in (tp_order_id, sl_order_id):
+                            if oid:
+                                try:
+                                    bot.exchange.cancel_order(oid, symbol)
+                                except Exception as cancel_exc:
+                                    logging.warning(
+                                        "Could not cancel order %s for %s: %s",
+                                        oid, symbol, cancel_exc,
+                                    )
+                        sell_order = bot.sell(symbol, quantity)
+                        logging.info(
+                            "Closed position (take_profit): %s qty=%s @ %s",
+                            symbol,
+                            quantity,
+                            sell_order.get("price"),
+                        )
+                        del positions[symbol]
+                    # Indicator-based sell signal
                     elif bot.should_sell(symbol):
                         sell_order = bot.sell(symbol, quantity)
                         logging.info(
