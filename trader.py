@@ -27,9 +27,7 @@ Scored conditions (3 out of 5 required by default):
 
 Mandatory gates (must all pass regardless of score):
 
-- RVOL ≥ ``config.RVOL_THRESHOLD`` (5.0×) — volume surge confirmation.
-- Price above the upper Bollinger Band **or** upper Keltner Channel —
-  confirmed breakout.
+- RVOL ≥ ``config.RVOL_THRESHOLD`` (1.5×) — above-average volume confirmation.
 - 24-hour quote volume ≥ ``config.MIN_VOLUME_USD`` ($15 000).
 - Bid-ask spread < ``config.MAX_BID_ASK_SPREAD_PCT`` (0.75 %).
 
@@ -1406,10 +1404,8 @@ class CryptoTrader:
 
         **Mandatory gates** (all must pass regardless of score):
 
-        * RVOL ≥ ``config.RVOL_THRESHOLD`` (default 5.0) — unusually high
-          participation confirms the move.
-        * Price above the upper Bollinger Band **or** upper Keltner Channel —
-          confirmed volatility or momentum breakout.
+        * RVOL ≥ ``config.RVOL_THRESHOLD`` (default 1.5) — above-average
+          volume confirms participation in the move.
         * 24-hour quote volume ≥ ``config.MIN_VOLUME_USD`` — sufficient
           liquidity.
         * Bid-ask spread < ``config.MAX_BID_ASK_SPREAD_PCT`` — tight market.
@@ -1448,7 +1444,6 @@ class CryptoTrader:
 
         # --- Mandatory gates ---
         rvol_high = indicators["rvol"] >= config.RVOL_THRESHOLD
-        breakout  = price > indicators["bb_upper"] or price > indicators["kc_upper"]
 
         try:
             self._check_volume(symbol)
@@ -1464,13 +1459,13 @@ class CryptoTrader:
             logger.warning("should_buy %s — spread check failed: %s", symbol, exc)
             spread_ok = False
 
-        signal = score_ok and rvol_high and breakout and volume_ok and spread_ok
+        signal = score_ok and rvol_high and volume_ok and spread_ok
 
         logger.info(
             "should_buy %s — rsi=%.2f(bull=%s) wt1=%.2f wt2=%.2f(bull=%s) "
             "cci=%.2f(bull=%s) adx=%.2f +di=%.2f -di=%.2f(bull=%s) "
             "kernel=%.4f(bull=%s) score=%d/%d score_ok=%s "
-            "rvol=%.2f(ok=%s) breakout=%s volume_ok=%s spread_ok=%s → signal=%s",
+            "rvol=%.2f(ok=%s) volume_ok=%s spread_ok=%s → signal=%s",
             symbol,
             indicators["rsi"], rsi_bullish,
             indicators["wt1"], indicators["wt2"], wt_bullish,
@@ -1479,7 +1474,7 @@ class CryptoTrader:
             indicators["kernel"], kernel_bullish,
             buy_score, config.BUY_SIGNAL_THRESHOLD, score_ok,
             indicators["rvol"], rvol_high,
-            breakout, volume_ok, spread_ok,
+            volume_ok, spread_ok,
             signal,
         )
         return signal
