@@ -1006,14 +1006,14 @@ class TestShouldBuy(unittest.TestCase):
                              kc_upper=price - 1.0)   # price > KC upper
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_price_below_both_bands(self):
-        # Price below both upper bands → no breakout
+    def test_signal_fires_when_price_below_both_bands(self):
+        # Breakout gate removed — buy signal fires even when price is below both upper bands
         trader = _make_trader()
         price = 110.0
         self._set_indicators(trader, price=price, vwap=100.0, rsi=25.0,
                              bb_upper=price + 5.0,   # price < BB upper
                              kc_upper=price + 5.0)   # price < KC upper
-        self.assertFalse(trader.should_buy(self.SYMBOL))
+        self.assertTrue(trader.should_buy(self.SYMBOL))
 
     def test_buy_signal_fires_regardless_of_volume_profile_poc(self):
         # POC is not a buy condition; signal should fire regardless of POC position
@@ -2327,14 +2327,14 @@ class TestComprehensiveBuySignal(unittest.TestCase):
         trader = self._trader_with_indicators(rvol=config.RVOL_THRESHOLD - 0.01)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
-    def test_no_buy_when_no_breakout(self):
-        # All 5 indicators bullish and RVOL passes, but price below both bands
+    def test_buy_fires_when_price_below_both_bands(self):
+        # Breakout gate removed — signal fires even when price is below both upper bands
         price = 110.0
         trader = self._trader_with_indicators(
             bb_upper=price + 5.0,   # price < BB upper
             kc_upper=price + 5.0,   # price < KC upper
         )
-        self.assertFalse(trader.should_buy(self.SYMBOL))
+        self.assertTrue(trader.should_buy(self.SYMBOL))
 
     def test_buy_fires_when_only_bb_breakout(self):
         # Price above BB upper only (below KC upper): breakout gate passes

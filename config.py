@@ -78,7 +78,7 @@ SELL_SIGNAL_THRESHOLD = 3  # Min bearish indicator count required for a sell (ou
 # RVOL = current candle volume / average volume over the preceding RVOL_PERIOD candles.
 # A high RVOL indicates that the current candle is seeing unusually heavy participation.
 RVOL_PERIOD    = 20   # Number of prior candles used to compute the average volume
-RVOL_THRESHOLD = 5.0  # Buy signal requires current volume ≥ RVOL_THRESHOLD × average
+RVOL_THRESHOLD = 1.5  # Buy signal requires current volume ≥ RVOL_THRESHOLD × average
 
 # Volume Profile HD settings
 VOLUME_PROFILE_BINS = 50  # Number of equal-width price bins for the volume profile
