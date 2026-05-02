@@ -19,9 +19,9 @@ Buy signal
 ~~~~~~~~~~
 Scored conditions (3 out of 5 required by default):
 
-1. **RSI** < ``config.RSI_OVERSOLD`` (50) — momentum not yet extended.
+1. **RSI** < ``config.RSI_OVERSOLD`` (35) — approaching oversold territory.
 2. **WaveTrend** WT1 > WT2 and WT1 < overbought level — bullish momentum.
-3. **CCI** > ``config.CCI_OVERSOLD`` (−100) — recovering from oversold.
+3. **CCI** crosses above ``config.CCI_OVERSOLD`` (−100) from below — recovering from oversold.
 4. **ADX** > ``config.ADX_THRESHOLD`` (20) and +DI > −DI — uptrend strength.
 5. **Kernel Filter** — price ≥ kernel-smoothed regression line (upward bias).
 
@@ -1300,7 +1300,7 @@ class CryptoTrader:
             "kc_upper": float, "kc_middle": float, "kc_lower": float,
             "rvol": float,
             "wt1": float, "wt2": float,
-            "cci": float,
+            "cci": float, "prev_cci": float,
             "adx": float, "plus_di": float, "minus_di": float,
             "kernel": float}``
         """
@@ -1312,7 +1312,7 @@ class CryptoTrader:
             config.KC_PERIOD + config.RVOL_PERIOD + 10,
             wt_min + 10,
             adx_min + 10,
-            config.CCI_PERIOD + 10,
+            config.CCI_PERIOD + 11,  # +1 for prev_cci (uses ohlcv[:-1])
             config.KERNEL_BANDWIDTH + 10,
         )
         ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -1332,6 +1332,7 @@ class CryptoTrader:
             ohlcv, config.WT_CHANNEL_LENGTH, config.WT_AVERAGE_LENGTH, config.WT_MA_LENGTH
         )
         cci = self._compute_cci(ohlcv, config.CCI_PERIOD)
+        prev_cci = self._compute_cci(ohlcv[:-1], config.CCI_PERIOD)
         adx_result = self._compute_adx(ohlcv, config.ADX_PERIOD)
         kernel = self._compute_kernel_filter(closes, config.KERNEL_BANDWIDTH)
         current_price = closes[-1]
@@ -1375,6 +1376,7 @@ class CryptoTrader:
             "wt1": wt["wt1"],
             "wt2": wt["wt2"],
             "cci": cci,
+            "prev_cci": prev_cci,
             "adx": adx_result["adx"],
             "plus_di": adx_result["plus_di"],
             "minus_di": adx_result["minus_di"],
@@ -1391,12 +1393,13 @@ class CryptoTrader:
         **Scored conditions** (each worth 1 point; scored against
         ``config.BUY_SIGNAL_THRESHOLD``, default 3 out of 5):
 
-        1. **RSI** < ``config.RSI_OVERSOLD`` (default 50) — momentum has not
-           yet reached overbought territory.
+        1. **RSI** < ``config.RSI_OVERSOLD`` (default 35) — price is approaching
+           oversold territory; momentum has declined enough to warrant attention.
         2. **WaveTrend** — WT1 > WT2 (bullish momentum crossover direction)
            and WT1 is below the overbought level (``config.WT_OVERBOUGHT``).
-        3. **CCI** > ``config.CCI_OVERSOLD`` (default −100) — price is above
-           the oversold threshold, indicating recovering momentum.
+        3. **CCI** crosses above ``config.CCI_OVERSOLD`` (default −100) from
+           below — the previous candle was in oversold territory and the
+           current candle has recovered above it.
         4. **ADX** > ``config.ADX_THRESHOLD`` (default 20) and +DI > −DI —
            a trending market with upward directional bias.
         5. **Kernel Filter** — current price ≥ kernel-smoothed regression line,
@@ -1432,7 +1435,10 @@ class CryptoTrader:
             indicators["wt1"] > indicators["wt2"]
             and indicators["wt1"] < config.WT_OVERBOUGHT
         )
-        cci_bullish  = indicators["cci"] > config.CCI_OVERSOLD
+        cci_bullish  = (
+            indicators["prev_cci"] < config.CCI_OVERSOLD
+            and indicators["cci"] > config.CCI_OVERSOLD
+        )
         adx_bullish  = (
             indicators["adx"] > config.ADX_THRESHOLD
             and indicators["plus_di"] > indicators["minus_di"]
@@ -1463,13 +1469,13 @@ class CryptoTrader:
 
         logger.info(
             "should_buy %s — rsi=%.2f(bull=%s) wt1=%.2f wt2=%.2f(bull=%s) "
-            "cci=%.2f(bull=%s) adx=%.2f +di=%.2f -di=%.2f(bull=%s) "
+            "prev_cci=%.2f cci=%.2f(bull=%s) adx=%.2f +di=%.2f -di=%.2f(bull=%s) "
             "kernel=%.4f(bull=%s) score=%d/%d score_ok=%s "
             "rvol=%.2f(ok=%s) volume_ok=%s spread_ok=%s → signal=%s",
             symbol,
             indicators["rsi"], rsi_bullish,
             indicators["wt1"], indicators["wt2"], wt_bullish,
-            indicators["cci"], cci_bullish,
+            indicators["prev_cci"], indicators["cci"], cci_bullish,
             indicators["adx"], indicators["plus_di"], indicators["minus_di"], adx_bullish,
             indicators["kernel"], kernel_bullish,
             buy_score, config.BUY_SIGNAL_THRESHOLD, score_ok,

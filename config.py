@@ -29,7 +29,7 @@ STOP_LOSS_PCT   = 0.0175  # Close position when price falls 1.75 % below entry
 # Technical indicator settings
 EMA_PERIOD     = 200   # 200-period Exponential Moving Average (utility; not used by buy signal)
 RSI_PERIOD     = 14    # RSI look-back period (Wilder smoothing)
-RSI_OVERSOLD   = 50    # RSI below this level → buy signal (< 50, momentum not yet overbought)
+RSI_OVERSOLD   = 35    # RSI below this level → buy signal (approaching oversold territory)
 RSI_OVERBOUGHT = 70    # RSI above this level → overbought (potential sell)
 
 # ATR (Average True Range) settings
