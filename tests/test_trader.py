@@ -20,6 +20,7 @@ def _make_full_indicators(
     wt1=30.0,
     wt2=35.0,
     cci=50.0,
+    prev_cci=0.0,
     adx=15.0,
     plus_di=30.0,
     minus_di=15.0,
@@ -56,6 +57,7 @@ def _make_full_indicators(
         "wt1": wt1,
         "wt2": wt2,
         "cci": cci,
+        "prev_cci": prev_cci,
         "adx": adx,
         "plus_di": plus_di,
         "minus_di": minus_di,
@@ -172,7 +174,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.RSI_PERIOD, 14)
 
     def test_rsi_oversold(self):
-        self.assertEqual(config.RSI_OVERSOLD, 50)
+        self.assertEqual(config.RSI_OVERSOLD, 35)
 
     def test_rsi_overbought(self):
         self.assertEqual(config.RSI_OVERBOUGHT, 70)
@@ -885,7 +887,7 @@ class TestGetIndicators(unittest.TestCase):
             "price", "vwap", "rsi", "atr", "volume_profile_poc",
             "simple_algo_signal", "bb_upper", "bb_middle", "bb_lower",
             "kc_upper", "kc_middle", "kc_lower", "rvol",
-            "wt1", "wt2", "cci", "adx", "plus_di", "minus_di", "kernel",
+            "wt1", "wt2", "cci", "prev_cci", "adx", "plus_di", "minus_di", "kernel",
         ):
             self.assertIn(key, result)
 
@@ -925,7 +927,7 @@ class TestShouldBuy(unittest.TestCase):
                         volume_profile_poc=None, simple_algo_signal=True,
                         quote_volume=None, bid=None, atr=1.0,
                         rvol=None, bb_upper=None, kc_upper=None,
-                        wt1=10.0, wt2=5.0, cci=0.0,
+                        wt1=10.0, wt2=5.0, cci=0.0, prev_cci=-110.0,
                         adx=25.0, plus_di=30.0, minus_di=15.0, kernel=None):
         """Patch get_indicators to return controlled values and set up a ticker mock.
 
@@ -960,6 +962,7 @@ class TestShouldBuy(unittest.TestCase):
                 "wt1": wt1,
                 "wt2": wt2,
                 "cci": cci,
+                "prev_cci": prev_cci,
                 "adx": adx,
                 "plus_di": plus_di,
                 "minus_di": minus_di,
@@ -1319,9 +1322,10 @@ class TestVolumeIntegration(unittest.TestCase):
         trader.get_indicators = MagicMock(
             return_value=_make_full_indicators(
                 price=price,
-                rsi=25.0,                # bullish: RSI < RSI_OVERSOLD(50)
+                rsi=25.0,                # bullish: RSI < RSI_OVERSOLD(35)
                 wt1=10.0, wt2=5.0,       # bullish: wt1 > wt2, wt1 < WT_OVERBOUGHT
-                cci=0.0,                 # bullish: CCI > CCI_OVERSOLD(-100)
+                prev_cci=-110.0,         # bullish: prev_cci < CCI_OVERSOLD(-100) ...
+                cci=0.0,                 # ... and cci > CCI_OVERSOLD(-100) → crossover
                 adx=25.0, plus_di=30.0, minus_di=15.0,  # bullish
                 kernel=price - 5.0,      # bullish: price >= kernel
                 bb_upper=price - 1.0,    # price above BB upper → breakout
@@ -1423,7 +1427,7 @@ class TestCheckSpread(unittest.TestCase):
             return_value=_make_full_indicators(
                 price=price,
                 rsi=25.0,
-                wt1=10.0, wt2=5.0, cci=0.0,
+                wt1=10.0, wt2=5.0, prev_cci=-110.0, cci=0.0,
                 adx=25.0, plus_di=30.0, minus_di=15.0,
                 kernel=price - 5.0,
                 bb_upper=price - 1.0,
@@ -2285,7 +2289,7 @@ class TestComprehensiveBuySignal(unittest.TestCase):
             price=price,
             rsi=25.0,
             wt1=10.0, wt2=5.0,
-            cci=0.0,
+            prev_cci=-110.0, cci=0.0,
             adx=25.0, plus_di=30.0, minus_di=15.0,
             kernel=price - 5.0,
             bb_upper=price - 1.0,
