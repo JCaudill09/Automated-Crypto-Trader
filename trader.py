@@ -1312,7 +1312,7 @@ class CryptoTrader:
             config.KC_PERIOD + config.RVOL_PERIOD + 10,
             wt_min + 10,
             adx_min + 10,
-            config.CCI_PERIOD + 10,
+            config.CCI_PERIOD + 11,  # +1 for prev_cci (uses ohlcv[:-1])
             config.KERNEL_BANDWIDTH + 10,
         )
         ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -1393,8 +1393,8 @@ class CryptoTrader:
         **Scored conditions** (each worth 1 point; scored against
         ``config.BUY_SIGNAL_THRESHOLD``, default 3 out of 5):
 
-        1. **RSI** < ``config.RSI_OVERSOLD`` (default 35) — approaching oversold
-           territory; momentum is not yet extended.
+        1. **RSI** < ``config.RSI_OVERSOLD`` (default 35) — price is approaching
+           oversold territory; momentum has declined enough to warrant attention.
         2. **WaveTrend** — WT1 > WT2 (bullish momentum crossover direction)
            and WT1 is below the overbought level (``config.WT_OVERBOUGHT``).
         3. **CCI** crosses above ``config.CCI_OVERSOLD`` (default −100) from

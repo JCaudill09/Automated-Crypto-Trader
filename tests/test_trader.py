@@ -908,7 +908,7 @@ class TestGetIndicators(unittest.TestCase):
             config.KC_PERIOD + config.RVOL_PERIOD + 10,
             wt_min + 10,
             adx_min + 10,
-            config.CCI_PERIOD + 10,
+            config.CCI_PERIOD + 11,
             config.KERNEL_BANDWIDTH + 10,
         )
         self.trader.exchange.fetch_ohlcv.assert_called_once_with(
