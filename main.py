@@ -190,16 +190,6 @@ def main():
                             sell_order.get("price"),
                         )
                         del positions[symbol]
-                    # RSI-based take-profit exit (overbought signal)
-                    elif bot.should_sell(symbol):
-                        sell_order = bot.sell(symbol, quantity)
-                        logging.info(
-                            "Closed position (rsi_overbought): %s qty=%s @ %s",
-                            symbol,
-                            quantity,
-                            sell_order.get("price"),
-                        )
-                        del positions[symbol]
                     else:
                         result = bot.check_exit_orders(
                             symbol, tp_order_id, sl_order_id, entry_price
