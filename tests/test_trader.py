@@ -634,6 +634,13 @@ class TestShouldBuy(unittest.TestCase):
                              ema_13=60.0, ema_48=50.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
+    def test_no_signal_when_ema_13_equals_ema_48(self):
+        trader = _make_trader()
+        # ema_13 == ema_48 → not strictly greater → no crossover
+        self._set_indicators(trader, prev_ema_13=49.0, prev_ema_48=50.0,
+                             ema_13=50.0, ema_48=50.0)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
     def test_no_signal_when_ema_13_still_below_48(self):
         trader = _make_trader()
         # ema_13 (45) <= ema_48 (50) → no crossover
