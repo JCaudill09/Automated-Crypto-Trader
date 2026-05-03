@@ -53,7 +53,7 @@ SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
 # Minimum 24-hour quote-currency volume (USD) required before a buy order is
 # placed or a buy signal is issued.  Any symbol whose 24-hour volume is below
 # this threshold is rejected as too illiquid.
-MIN_VOLUME_USD = 15_000.0  # $15,000
+MIN_VOLUME_USD = 5_000.0  # $5,000
 
 # Maximum allowed bid-ask spread expressed as a fraction of the ask price.
 # A spread above this threshold indicates insufficient liquidity or a
