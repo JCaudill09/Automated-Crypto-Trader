@@ -17,9 +17,8 @@ Both of the following conditions must be true:
 
 1. **200 EMA** — the current closing price is above the 200-period EMA,
    confirming the asset is in a long-term uptrend.
-2. **13/48 EMA crossover** — the 13-period EMA has *just* crossed above
-   the 48-period EMA (previous candle: EMA 13 ≤ EMA 48; current candle:
-   EMA 13 > EMA 48), indicating a fresh bullish momentum signal.
+2. **13/48 EMA alignment** — the 13-period EMA is above the 48-period
+   EMA, indicating bullish momentum.
 
 Mandatory gates (must pass for a buy signal to fire):
 
@@ -754,9 +753,8 @@ class CryptoTrader:
 
         1. **200 EMA** — the current closing price is above the 200-period
            EMA, confirming a long-term uptrend.
-        2. **13/48 EMA crossover** — the 13-period EMA has *just* crossed
-           above the 48-period EMA on this candle (previous candle:
-           EMA 13 ≤ EMA 48; current candle: EMA 13 > EMA 48).
+        2. **13/48 EMA alignment** — the 13-period EMA is above the
+           48-period EMA, indicating bullish momentum.
 
         Additionally, the following mandatory gates must pass:
 
@@ -781,11 +779,8 @@ class CryptoTrader:
         # Condition 1: price is above the 200-period EMA
         ema_200_bullish = price > indicators["ema_200"]
 
-        # Condition 2: fresh 13/48 EMA bullish crossover on this candle
-        ema_cross_bullish = (
-            indicators["prev_ema_13"] <= indicators["prev_ema_48"]
-            and indicators["ema_13"] > indicators["ema_48"]
-        )
+        # Condition 2: 13-period EMA is above the 48-period EMA (bullish alignment)
+        ema_cross_bullish = indicators["ema_13"] > indicators["ema_48"]
 
         signal_ok = ema_200_bullish and ema_cross_bullish
 
@@ -807,13 +802,12 @@ class CryptoTrader:
 
         logger.info(
             "should_buy %s — price=%.4f EMA200=%.4f(bull=%s) "
-            "EMA13=%.4f EMA48=%.4f prev_EMA13=%.4f prev_EMA48=%.4f(cross=%s) "
+            "EMA13=%.4f EMA48=%.4f(aligned=%s) "
             "volume_ok=%s spread_ok=%s → signal=%s",
             symbol,
             price,
             indicators["ema_200"], ema_200_bullish,
-            indicators["ema_13"], indicators["ema_48"],
-            indicators["prev_ema_13"], indicators["prev_ema_48"], ema_cross_bullish,
+            indicators["ema_13"], indicators["ema_48"], ema_cross_bullish,
             volume_ok, spread_ok,
             signal,
         )
