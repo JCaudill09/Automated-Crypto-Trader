@@ -627,12 +627,12 @@ class TestShouldBuy(unittest.TestCase):
         self._set_indicators(trader, price=100.0, ema_200=100.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_no_crossover_already_above(self):
+    def test_signal_when_ema_13_already_above_48(self):
         trader = _make_trader()
-        # prev_ema_13 (55) > prev_ema_48 (50) → no fresh cross (already above)
+        # EMA 13 (60) > EMA 48 (50) → bullish alignment → buy signal fires
         self._set_indicators(trader, prev_ema_13=55.0, prev_ema_48=50.0,
                              ema_13=60.0, ema_48=50.0)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
+        self.assertTrue(trader.should_buy(self.SYMBOL))
 
     def test_no_signal_when_ema_13_equals_ema_48(self):
         trader = _make_trader()
@@ -648,20 +648,20 @@ class TestShouldBuy(unittest.TestCase):
                              ema_13=45.0, ema_48=50.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
-    def test_fresh_crossover_with_equal_prev_fires(self):
+    def test_signal_when_ema_13_just_above_48(self):
         trader = _make_trader()
-        # prev_ema_13 == prev_ema_48 (boundary of <= condition) counts as a crossover
+        # ema_13 (51) > ema_48 (50) → bullish alignment fires
         self._set_indicators(trader, prev_ema_13=50.0, prev_ema_48=50.0,
                              ema_13=51.0, ema_48=50.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_only_200_ema_bullish(self):
+    def test_signal_when_both_200_ema_and_ema_13_above_48(self):
         trader = _make_trader()
-        # price > ema_200 but EMA 13 already above 48 (no fresh cross)
+        # price > ema_200 and EMA 13 above 48 → buy signal fires
         self._set_indicators(trader, price=110.0, ema_200=100.0,
                              prev_ema_13=55.0, prev_ema_48=50.0,
                              ema_13=60.0, ema_48=50.0)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
+        self.assertTrue(trader.should_buy(self.SYMBOL))
 
     def test_no_signal_when_only_crossover_bullish(self):
         trader = _make_trader()
