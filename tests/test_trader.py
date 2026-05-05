@@ -5,75 +5,11 @@ All tests run without real network calls — exchange interactions are
 patched with unittest.mock so no API keys are required.
 """
 
-import datetime
 import unittest
-import unittest.mock
 from unittest.mock import MagicMock, patch
 
 import config
-from trader import CryptoTrader, OrderSizeError, InsufficientVolumeError, WideBidAskSpreadError
-
-
-def _make_full_indicators(
-    price=100.0,
-    ema_200=90.0,
-    ema_13=55.0,
-    ema_48=50.0,
-    prev_ema_13=49.0,
-    prev_ema_48=50.0,
-) -> dict:
-    """Build a complete indicator dict suitable for mocking ``get_indicators``.
-
-    Defaults produce a **bullish** state:
-    - price > ema_200 (above 200 EMA)
-    - prev_ema_13 <= prev_ema_48 and ema_13 > ema_48 (fresh crossover)
-
-    Override individual fields to drive specific test scenarios.
-    """
-    return {
-        "price": price,
-        "ema_200": ema_200,
-        "ema_13": ema_13,
-        "ema_48": ema_48,
-        "prev_ema_13": prev_ema_13,
-        "prev_ema_48": prev_ema_48,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Test constants
-# ---------------------------------------------------------------------------
-
-
-def _min_volume() -> float:
-    """Return the minimum required 24-hour volume."""
-    return config.MIN_VOLUME_USD
-
-
-def _make_ticker(
-    price: float,
-    *,
-    bid: float | None = None,
-    quote_volume: float | None = None,
-) -> dict:
-    """Build a minimal ticker dict suitable for mocking ``fetch_ticker``.
-
-    Defaults produce a ticker that passes both the volume and spread checks:
-    - ``quoteVolume`` is 10× the required minimum.
-    - ``bid`` is 0.1 % below ``ask``, giving a 0.1 % spread (< 1 % max).
-    """
-    ask = price
-    if bid is None:
-        bid = price * (1.0 - 0.001)  # 0.1 % spread — passes spread check
-    if quote_volume is None:
-        quote_volume = config.MIN_VOLUME_USD * 10
-    return {
-        "ask": ask,
-        "bid": bid,
-        "last": price,
-        "quoteVolume": quote_volume,
-        "info": {},
-    }
+from trader import CryptoTrader, OrderSizeError, InsufficientVolumeError
 
 
 # ---------------------------------------------------------------------------
@@ -98,28 +34,17 @@ def _make_trader(**kwargs) -> CryptoTrader:
 
 
 def _set_price(trader: CryptoTrader, symbol: str, price: float) -> None:
-    """Configure the mocked exchange to return *price* and sufficient volume/spread for *symbol*."""
-    trader.exchange.fetch_ticker.return_value = _make_ticker(price)
+    """Configure the mocked exchange to return *price* and sufficient volume for *symbol*."""
+    trader.exchange.fetch_ticker.return_value = {
+        "ask": price,
+        "last": price,
+        "quoteVolume": config.MIN_VOLUME_USD * 10,
+    }
 
 
-def _make_ohlcv(closes: list, volume: float = 1000.0) -> list:
-    """Build a minimal OHLCV list from a sequence of close prices.
-
-    Sets open = high = low = close = c so that typical_price == c, making
-    VWAP and Volume Profile deterministic in tests.
-    """
-    return [[0, c, c, c, c, volume] for c in closes]
-
-
-def _make_atr_ohlcv(n: int, close: float = 100.0, spread: float = 5.0) -> list:
-    """Build OHLCV candles with a constant close and fixed high-low spread.
-
-    high = close + spread, low = close - spread.  With a constant close
-    price, the True Range for each candle (after the first) equals
-    ``2 * spread``, so the ATR is also ``2 * spread``.
-    """
-    return [[0, close, close + spread, close - spread, close, 1000.0]
-            for _ in range(n)]
+def _make_ohlcv(closes: list) -> list:
+    """Build a minimal OHLCV list from a sequence of close prices."""
+    return [[0, 0, 0, 0, c, 0] for c in closes]
 
 
 # ---------------------------------------------------------------------------
@@ -131,40 +56,31 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.MIN_BUY_ORDER, 30.0)
 
     def test_max_buy_order_is_50(self):
-        self.assertEqual(config.MAX_BUY_ORDER, 78.0)
+        self.assertEqual(config.MAX_BUY_ORDER, 50.0)
 
     def test_min_less_than_max(self):
         self.assertLess(config.MIN_BUY_ORDER, config.MAX_BUY_ORDER)
 
     def test_take_profit_pct(self):
-        self.assertAlmostEqual(config.TAKE_PROFIT_PCT, 0.065)
+        self.assertAlmostEqual(config.TAKE_PROFIT_PCT, 0.075)
 
     def test_stop_loss_pct(self):
-        self.assertAlmostEqual(config.STOP_LOSS_PCT, 0.0175)
+        self.assertAlmostEqual(config.STOP_LOSS_PCT, 0.025)
 
     def test_ema_period(self):
         self.assertEqual(config.EMA_PERIOD, 200)
 
-    def test_ema_cross_short_period(self):
-        self.assertEqual(config.EMA_CROSS_SHORT_PERIOD, 13)
+    def test_rsi_period(self):
+        self.assertEqual(config.RSI_PERIOD, 14)
 
-    def test_ema_cross_long_period(self):
-        self.assertEqual(config.EMA_CROSS_LONG_PERIOD, 48)
+    def test_rsi_oversold(self):
+        self.assertEqual(config.RSI_OVERSOLD, 30)
 
-    def test_ema_cross_short_less_than_long(self):
-        self.assertLess(config.EMA_CROSS_SHORT_PERIOD, config.EMA_CROSS_LONG_PERIOD)
-
-    def test_atr_period(self):
-        self.assertEqual(config.ATR_PERIOD, 14)
-
-    def test_atr_stop_loss_multiplier(self):
-        self.assertAlmostEqual(config.ATR_STOP_LOSS_MULTIPLIER, 1.5)
+    def test_rsi_overbought(self):
+        self.assertEqual(config.RSI_OVERBOUGHT, 70)
 
     def test_min_volume_usd_positive(self):
         self.assertGreater(config.MIN_VOLUME_USD, 0)
-
-    def test_max_bid_ask_spread_pct_positive(self):
-        self.assertGreater(config.MAX_BID_ASK_SPREAD_PCT, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -194,105 +110,59 @@ class TestExchangeIdNormalization(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# get_usd_symbols tests
+# get_usdt_symbols tests
 # ---------------------------------------------------------------------------
 
-class TestGetUsdSymbols(unittest.TestCase):
+class TestGetUsdtSymbols(unittest.TestCase):
     def setUp(self):
         self.trader = _make_trader()
 
     def _set_markets(self, markets: dict) -> None:
         self.trader.exchange.load_markets.return_value = markets
 
-    def test_returns_only_usd_pairs(self):
+    def test_returns_only_usdt_pairs(self):
         self._set_markets({
-            "BTC/USD": {"quote": "USD", "active": True},
-            "ETH/USD": {"quote": "USD", "active": True},
+            "BTC/USDT": {"quote": "USDT", "active": True},
+            "ETH/USDT": {"quote": "USDT", "active": True},
             "BTC/BTC": {"quote": "BTC", "active": True},
         })
-        symbols = self.trader.get_usd_symbols()
-        self.assertIn("BTC/USD", symbols)
-        self.assertIn("ETH/USD", symbols)
+        symbols = self.trader.get_usdt_symbols()
+        self.assertIn("BTC/USDT", symbols)
+        self.assertIn("ETH/USDT", symbols)
         self.assertNotIn("BTC/BTC", symbols)
 
     def test_excludes_inactive_pairs(self):
         self._set_markets({
-            "BTC/USD": {"quote": "USD", "active": True},
-            "XRP/USD": {"quote": "USD", "active": False},
+            "BTC/USDT": {"quote": "USDT", "active": True},
+            "XRP/USDT": {"quote": "USDT", "active": False},
         })
-        symbols = self.trader.get_usd_symbols()
-        self.assertIn("BTC/USD", symbols)
-        self.assertNotIn("XRP/USD", symbols)
+        symbols = self.trader.get_usdt_symbols()
+        self.assertIn("BTC/USDT", symbols)
+        self.assertNotIn("XRP/USDT", symbols)
 
     def test_returns_sorted_list(self):
         self._set_markets({
-            "SOL/USD": {"quote": "USD", "active": True},
-            "ADA/USD": {"quote": "USD", "active": True},
-            "BTC/USD": {"quote": "USD", "active": True},
-        })
-        symbols = self.trader.get_usd_symbols()
-        self.assertEqual(symbols, sorted(symbols))
-
-    def test_raises_when_no_usd_pairs_found(self):
-        self._set_markets({
+            "SOL/USDT": {"quote": "USDT", "active": True},
+            "ADA/USDT": {"quote": "USDT", "active": True},
             "BTC/USDT": {"quote": "USDT", "active": True},
         })
+        symbols = self.trader.get_usdt_symbols()
+        self.assertEqual(symbols, sorted(symbols))
+
+    def test_raises_when_no_usdt_pairs_found(self):
+        self._set_markets({
+            "BTC/USD": {"quote": "USD", "active": True},
+        })
         with self.assertRaises(RuntimeError):
-            self.trader.get_usd_symbols()
+            self.trader.get_usdt_symbols()
 
     def test_active_defaults_to_true_when_key_missing(self):
         # Markets without an 'active' key should be included.
         self._set_markets({
-            "DOT/USD": {"quote": "USD"},
+            "DOT/USDT": {"quote": "USDT"},
         })
-        symbols = self.trader.get_usd_symbols()
-        self.assertIn("DOT/USD", symbols)
-
-    def test_includes_stocks_and_etfs_when_asset_types_is_none(self):
-        # With ASSET_TYPES = None all market types should be returned.
-        self._set_markets({
-            "BTC/USD":  {"quote": "USD", "active": True, "type": "spot"},
-            "AAPL/USD": {"quote": "USD", "active": True, "type": "spot"},
-            "SPY/USD":  {"quote": "USD", "active": True, "type": "spot"},
-        })
-        with unittest.mock.patch.object(config, "ASSET_TYPES", None):
-            symbols = self.trader.get_usd_symbols()
-        self.assertIn("BTC/USD", symbols)
-        self.assertIn("AAPL/USD", symbols)
-        self.assertIn("SPY/USD", symbols)
-
-    def test_asset_types_filter_includes_matching_types(self):
-        # Only markets whose ``type`` is in ASSET_TYPES should be returned.
-        self._set_markets({
-            "BTC/USD":  {"quote": "USD", "active": True, "type": "spot"},
-            "AAPL/USD": {"quote": "USD", "active": True, "type": "spot"},
-            "BTC-PERP/USD": {"quote": "USD", "active": True, "type": "swap"},
-        })
-        with unittest.mock.patch.object(config, "ASSET_TYPES", ["spot"]):
-            symbols = self.trader.get_usd_symbols()
-        self.assertIn("BTC/USD", symbols)
-        self.assertIn("AAPL/USD", symbols)
-        self.assertNotIn("BTC-PERP/USD", symbols)
-
-    def test_asset_types_filter_excludes_non_matching_types(self):
-        # Markets whose type is not in ASSET_TYPES must be excluded.
-        self._set_markets({
-            "BTC/USD":  {"quote": "USD", "active": True, "type": "spot"},
-            "BTC-PERP/USD": {"quote": "USD", "active": True, "type": "swap"},
-        })
-        with unittest.mock.patch.object(config, "ASSET_TYPES", ["swap"]):
-            symbols = self.trader.get_usd_symbols()
-        self.assertNotIn("BTC/USD", symbols)
-        self.assertIn("BTC-PERP/USD", symbols)
-
-    def test_asset_types_filter_raises_when_no_matching_pairs(self):
-        # If the filter leaves zero results a RuntimeError must be raised.
-        self._set_markets({
-            "BTC/USD": {"quote": "USD", "active": True, "type": "spot"},
-        })
-        with unittest.mock.patch.object(config, "ASSET_TYPES", ["future"]):
-            with self.assertRaises(RuntimeError):
-                self.trader.get_usd_symbols()
+        symbols = self.trader.get_usdt_symbols()
+        self.assertIn("DOT/USDT", symbols)
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +191,7 @@ class TestOrderLimitValidation(unittest.TestCase):
 
     def test_buy_above_maximum_raises(self):
         with self.assertRaises(OrderSizeError):
-            self.trader._validate_buy_amount(78.01)
+            self.trader._validate_buy_amount(50.01)
 
     def test_buy_way_above_maximum_raises(self):
         with self.assertRaises(OrderSizeError):
@@ -346,9 +216,9 @@ class TestOrderLimitValidation(unittest.TestCase):
 
     def test_error_message_contains_amounts_when_above(self):
         with self.assertRaises(OrderSizeError) as ctx:
-            self.trader._validate_buy_amount(85.0)
-        self.assertIn("85.00", str(ctx.exception))
-        self.assertIn("78.00", str(ctx.exception))
+            self.trader._validate_buy_amount(75.0)
+        self.assertIn("75.00", str(ctx.exception))
+        self.assertIn("50.00", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +226,7 @@ class TestOrderLimitValidation(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestPaperBuy(unittest.TestCase):
-    SYMBOL = "BTC/USD"
+    SYMBOL = "BTC/USDT"
     PRICE = 50_000.0
 
     def setUp(self):
@@ -396,7 +266,7 @@ class TestPaperBuy(unittest.TestCase):
 
     def test_buy_above_max_raises_before_exchange_call(self):
         with self.assertRaises(OrderSizeError):
-            self.trader.buy(self.SYMBOL, 80.0)
+            self.trader.buy(self.SYMBOL, 60.0)
         self.trader.exchange.create_market_buy_order.assert_not_called()
 
 
@@ -405,7 +275,7 @@ class TestPaperBuy(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestPaperSell(unittest.TestCase):
-    SYMBOL = "ETH/USD"
+    SYMBOL = "ETH/USDT"
     PRICE = 3_000.0
 
     def setUp(self):
@@ -446,16 +316,16 @@ class TestGetPrice(unittest.TestCase):
     def test_raises_when_ask_and_last_are_none(self):
         self.trader.exchange.fetch_ticker.return_value = {"ask": None, "last": None}
         with self.assertRaises(RuntimeError):
-            self.trader._get_price("BTC/USD")
+            self.trader._get_price("BTC/USDT")
 
     def test_raises_when_ask_and_last_are_zero(self):
         self.trader.exchange.fetch_ticker.return_value = {"ask": 0, "last": 0}
         with self.assertRaises(RuntimeError):
-            self.trader._get_price("BTC/USD")
+            self.trader._get_price("BTC/USDT")
 
     def test_uses_last_when_ask_is_none(self):
         self.trader.exchange.fetch_ticker.return_value = {"ask": None, "last": 2000.0}
-        price = self.trader._get_price("ETH/USD")
+        price = self.trader._get_price("ETH/USDT")
         self.assertEqual(price, 2000.0)
 
 
@@ -506,65 +376,67 @@ class TestComputeEMA(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# ATR computation tests
+# RSI computation tests
 # ---------------------------------------------------------------------------
 
-class TestComputeATR(unittest.TestCase):
-    def test_atr_constant_spread_equals_twice_spread(self):
-        # With all closes equal and high = close + 5, low = close - 5:
-        # TR = max(10, 5, 5) = 10 for every candle; ATR = 10
-        ohlcv = _make_atr_ohlcv(20, close=100.0, spread=5.0)
-        atr = CryptoTrader._compute_atr(ohlcv, period=14)
-        self.assertAlmostEqual(atr, 10.0, places=6)
+class TestComputeRSI(unittest.TestCase):
+    def test_rsi_all_gains_is_100(self):
+        # Strictly rising prices → no losses → RSI = 100
+        closes = [float(i) for i in range(1, 20)]
+        rsi = CryptoTrader._compute_rsi(closes, period=14)
+        self.assertAlmostEqual(rsi, 100.0, places=4)
 
-    def test_atr_zero_spread_is_zero(self):
-        # high == low == prev_close → all TRs = 0
-        ohlcv = _make_ohlcv([100.0] * 20)
-        atr = CryptoTrader._compute_atr(ohlcv, period=14)
-        self.assertAlmostEqual(atr, 0.0, places=6)
+    def test_rsi_all_losses_is_zero(self):
+        # Strictly falling prices → no gains → RSI = 0
+        closes = [float(i) for i in range(20, 0, -1)]
+        rsi = CryptoTrader._compute_rsi(closes, period=14)
+        self.assertAlmostEqual(rsi, 0.0, places=4)
 
-    def test_atr_is_positive_for_volatile_series(self):
+    def test_rsi_is_between_0_and_100(self):
         import random
-        random.seed(0)
-        closes = [100.0 + random.uniform(-10, 10) for _ in range(30)]
-        ohlcv = _make_ohlcv(closes)
-        atr = CryptoTrader._compute_atr(ohlcv, period=14)
-        self.assertGreaterEqual(atr, 0.0)
+        random.seed(42)
+        closes = [100.0 + random.uniform(-5, 5) for _ in range(30)]
+        rsi = CryptoTrader._compute_rsi(closes, period=14)
+        self.assertGreaterEqual(rsi, 0.0)
+        self.assertLessEqual(rsi, 100.0)
 
-    def test_atr_raises_when_too_few_candles(self):
-        ohlcv = _make_atr_ohlcv(5)
+    def test_rsi_raises_when_too_few_closes(self):
         with self.assertRaises(ValueError):
-            CryptoTrader._compute_atr(ohlcv, period=14)
+            CryptoTrader._compute_rsi([100.0] * 5, period=14)
 
-    def test_atr_exact_period_plus_one_candles(self):
-        ohlcv = _make_atr_ohlcv(15, spread=3.0)  # period=14 → needs 15 candles
-        atr = CryptoTrader._compute_atr(ohlcv, period=14)
-        self.assertAlmostEqual(atr, 6.0, places=6)  # 2 * spread
+    def test_rsi_midpoint_for_equal_moves(self):
+        # Alternating +1 / -1 → equal avg_gain and avg_loss → RSI ≈ 50
+        closes = []
+        price = 100.0
+        for i in range(30):
+            price += 1.0 if i % 2 == 0 else -1.0
+            closes.append(price)
+        rsi = CryptoTrader._compute_rsi(closes, period=14)
+        self.assertAlmostEqual(rsi, 50.0, delta=5.0)
 
-    def test_atr_is_float(self):
-        ohlcv = _make_atr_ohlcv(20)
-        self.assertIsInstance(CryptoTrader._compute_atr(ohlcv, period=14), float)
 
+# ---------------------------------------------------------------------------
+# get_indicators tests
+# ---------------------------------------------------------------------------
 
 class TestGetIndicators(unittest.TestCase):
-    SYMBOL = "BTC/USD"
+    SYMBOL = "BTC/USDT"
 
     def setUp(self):
         self.trader = _make_trader()
-        # Build enough synthetic candles for the 200-period EMA
-        n = config.EMA_PERIOD + 20
+        # Build enough synthetic closes (rising then flat)
+        n = config.EMA_PERIOD + config.RSI_PERIOD + 20
         closes = [float(i) for i in range(1, n + 1)]
         self.trader.exchange.fetch_ohlcv.return_value = _make_ohlcv(closes)
 
-    def test_returns_expected_indicator_keys(self):
+    def test_returns_price_ema200_rsi_keys(self):
         result = self.trader.get_indicators(self.SYMBOL)
-        for key in (
-            "price", "ema_200", "ema_13", "ema_48", "prev_ema_13", "prev_ema_48",
-        ):
-            self.assertIn(key, result)
+        self.assertIn("price", result)
+        self.assertIn("ema200", result)
+        self.assertIn("rsi", result)
 
     def test_price_equals_last_close(self):
-        n = config.EMA_PERIOD + 20
+        n = config.EMA_PERIOD + config.RSI_PERIOD + 20
         closes = [float(i) for i in range(1, n + 1)]
         self.trader.exchange.fetch_ohlcv.return_value = _make_ohlcv(closes)
         result = self.trader.get_indicators(self.SYMBOL)
@@ -572,7 +444,7 @@ class TestGetIndicators(unittest.TestCase):
 
     def test_fetch_ohlcv_called_with_correct_limit(self):
         self.trader.get_indicators(self.SYMBOL, timeframe="4h")
-        expected_limit = config.EMA_PERIOD * 3
+        expected_limit = config.EMA_PERIOD + config.RSI_PERIOD + 10
         self.trader.exchange.fetch_ohlcv.assert_called_once_with(
             self.SYMBOL, "4h", limit=expected_limit
         )
@@ -583,115 +455,47 @@ class TestGetIndicators(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestShouldBuy(unittest.TestCase):
-    SYMBOL = "BTC/USD"
+    SYMBOL = "BTC/USDT"
 
-    def _set_indicators(self, trader, price=110.0, *,
-                        ema_200=100.0, ema_13=55.0, ema_48=50.0,
-                        prev_ema_13=49.0, prev_ema_48=50.0,
-                        quote_volume=None, bid=None):
-        """Patch get_indicators and set up ticker mock.
-
-        Defaults produce a fully bullish signal:
-        - price > ema_200 (above 200 EMA)
-        - prev_ema_13 <= prev_ema_48 and ema_13 > ema_48 (fresh crossover)
-        - sufficient volume and tight spread
-        """
+    def _set_indicators(self, trader, price, ema200, rsi, quote_volume=None):
+        """Patch get_indicators to return controlled values and set up a ticker mock."""
         trader.get_indicators = MagicMock(
-            return_value={
-                "price": price,
-                "ema_200": ema_200,
-                "ema_13": ema_13,
-                "ema_48": ema_48,
-                "prev_ema_13": prev_ema_13,
-                "prev_ema_48": prev_ema_48,
-            }
+            return_value={"price": price, "ema200": ema200, "rsi": rsi}
         )
-        trader.exchange.fetch_ticker.return_value = _make_ticker(
-            price, bid=bid, quote_volume=quote_volume
+        vol = quote_volume if quote_volume is not None else config.MIN_VOLUME_USD * 10
+        trader.exchange.fetch_ticker.return_value = {
+            "ask": price,
+            "last": price,
+            "quoteVolume": vol,
+        }
+
+    def test_buy_signal_when_price_above_ema_and_rsi_oversold(self):
+        trader = _make_trader()
+        self._set_indicators(trader, price=110.0, ema200=100.0, rsi=25.0)
+        self.assertTrue(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_price_below_ema(self):
+        trader = _make_trader()
+        self._set_indicators(trader, price=90.0, ema200=100.0, rsi=25.0)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_rsi_not_oversold(self):
+        trader = _make_trader()
+        self._set_indicators(trader, price=110.0, ema200=100.0, rsi=50.0)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_rsi_at_exact_oversold_threshold(self):
+        # RSI must be *below* the threshold, not equal
+        trader = _make_trader()
+        self._set_indicators(
+            trader, price=110.0, ema200=100.0, rsi=config.RSI_OVERSOLD
         )
-
-    def test_buy_signal_when_both_conditions_met(self):
-        trader = _make_trader()
-        self._set_indicators(trader)
-        self.assertTrue(trader.should_buy(self.SYMBOL))
-
-    def test_no_signal_when_price_below_200_ema(self):
-        trader = _make_trader()
-        # price (90) <= ema_200 (100) → condition 1 fails
-        self._set_indicators(trader, price=90.0, ema_200=100.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_price_equals_200_ema(self):
+    def test_no_signal_when_both_conditions_fail(self):
         trader = _make_trader()
-        # price must be strictly greater than ema_200
-        self._set_indicators(trader, price=100.0, ema_200=100.0)
+        self._set_indicators(trader, price=90.0, ema200=100.0, rsi=60.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
-
-    def test_signal_when_ema_13_already_above_48(self):
-        trader = _make_trader()
-        # EMA 13 (60) > EMA 48 (50) → bullish alignment → buy signal fires
-        self._set_indicators(trader, prev_ema_13=55.0, prev_ema_48=50.0,
-                             ema_13=60.0, ema_48=50.0)
-        self.assertTrue(trader.should_buy(self.SYMBOL))
-
-    def test_no_signal_when_ema_13_equals_ema_48(self):
-        trader = _make_trader()
-        # ema_13 == ema_48 → not strictly greater → no crossover
-        self._set_indicators(trader, prev_ema_13=49.0, prev_ema_48=50.0,
-                             ema_13=50.0, ema_48=50.0)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
-    def test_no_signal_when_ema_13_still_below_48(self):
-        trader = _make_trader()
-        # ema_13 (45) <= ema_48 (50) → no crossover
-        self._set_indicators(trader, prev_ema_13=44.0, prev_ema_48=50.0,
-                             ema_13=45.0, ema_48=50.0)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
-    def test_signal_when_ema_13_just_above_48(self):
-        trader = _make_trader()
-        # ema_13 (51) > ema_48 (50) → bullish alignment fires
-        self._set_indicators(trader, prev_ema_13=50.0, prev_ema_48=50.0,
-                             ema_13=51.0, ema_48=50.0)
-        self.assertTrue(trader.should_buy(self.SYMBOL))
-
-    def test_signal_when_both_200_ema_and_ema_13_above_48(self):
-        trader = _make_trader()
-        # price > ema_200 and EMA 13 above 48 → buy signal fires
-        self._set_indicators(trader, price=110.0, ema_200=100.0,
-                             prev_ema_13=55.0, prev_ema_48=50.0,
-                             ema_13=60.0, ema_48=50.0)
-        self.assertTrue(trader.should_buy(self.SYMBOL))
-
-    def test_no_signal_when_only_crossover_bullish(self):
-        trader = _make_trader()
-        # fresh crossover but price < ema_200
-        self._set_indicators(trader, price=90.0, ema_200=100.0,
-                             prev_ema_13=49.0, prev_ema_48=50.0,
-                             ema_13=51.0, ema_48=50.0)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
-    def test_no_signal_when_volume_insufficient(self):
-        trader = _make_trader()
-        self._set_indicators(trader, quote_volume=_min_volume() - 1.0)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
-    def test_no_signal_when_spread_too_wide(self):
-        trader = _make_trader()
-        price = 110.0
-        # 1.5 % spread exceeds MAX_BID_ASK_SPREAD_PCT
-        self._set_indicators(trader, price=price, bid=price * (1.0 - 0.015))
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
-    def test_buy_fires_with_sufficient_volume(self):
-        trader = _make_trader()
-        self._set_indicators(trader, quote_volume=_min_volume() + 1.0)
-        self.assertTrue(trader.should_buy(self.SYMBOL))
-
-    def test_returns_bool(self):
-        trader = _make_trader()
-        self._set_indicators(trader)
-        self.assertIsInstance(trader.should_buy(self.SYMBOL), bool)
 
 
 # ---------------------------------------------------------------------------
@@ -699,7 +503,7 @@ class TestShouldBuy(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestCheckExit(unittest.TestCase):
-    SYMBOL = "BTC/USD"
+    SYMBOL = "BTC/USDT"
     ENTRY = 10_000.0
 
     def setUp(self):
@@ -755,25 +559,29 @@ class TestCheckExit(unittest.TestCase):
 
 def _set_volume(trader: CryptoTrader, symbol: str, quote_volume: float) -> None:
     """Configure the mocked exchange to return *quote_volume* for *symbol*."""
-    trader.exchange.fetch_ticker.return_value = _make_ticker(1.0, quote_volume=quote_volume)
+    trader.exchange.fetch_ticker.return_value = {
+        "ask": 1.0,
+        "last": 1.0,
+        "quoteVolume": quote_volume,
+    }
 
 
 class TestCheckVolume(unittest.TestCase):
-    SYMBOL = "BTC/USD"
+    SYMBOL = "BTC/USDT"
 
     def setUp(self):
         self.trader = _make_trader()
 
     def test_passes_when_volume_above_minimum(self):
-        _set_volume(self.trader, self.SYMBOL, _min_volume() + 1.0)
+        _set_volume(self.trader, self.SYMBOL, config.MIN_VOLUME_USD + 1.0)
         self.trader._check_volume(self.SYMBOL)  # should not raise
 
     def test_passes_when_volume_equals_minimum(self):
-        _set_volume(self.trader, self.SYMBOL, _min_volume())
+        _set_volume(self.trader, self.SYMBOL, config.MIN_VOLUME_USD)
         self.trader._check_volume(self.SYMBOL)  # should not raise
 
     def test_raises_when_volume_below_minimum(self):
-        _set_volume(self.trader, self.SYMBOL, _min_volume() - 1.0)
+        _set_volume(self.trader, self.SYMBOL, config.MIN_VOLUME_USD - 1.0)
         with self.assertRaises(InsufficientVolumeError):
             self.trader._check_volume(self.SYMBOL)
 
@@ -785,47 +593,19 @@ class TestCheckVolume(unittest.TestCase):
     def test_raises_when_volume_is_none(self):
         self.trader.exchange.fetch_ticker.return_value = {
             "ask": 1.0,
-            "bid": 0.999,
             "last": 1.0,
             "quoteVolume": None,
-            "info": {},
         }
         with self.assertRaises(InsufficientVolumeError):
             self.trader._check_volume(self.SYMBOL)
 
     def test_raises_when_quoteVolume_key_missing(self):
-        self.trader.exchange.fetch_ticker.return_value = {
-            "ask": 1.0,
-            "bid": 0.999,
-            "last": 1.0,
-            "info": {},
-        }
-        with self.assertRaises(InsufficientVolumeError):
-            self.trader._check_volume(self.SYMBOL)
-
-    def test_passes_when_volume_above_absolute_minimum(self):
-        self.trader.exchange.fetch_ticker.return_value = {
-            "ask": 1.0,
-            "bid": 0.999,
-            "last": 1.0,
-            "quoteVolume": config.MIN_VOLUME_USD + 1.0,
-            "info": {},
-        }
-        self.trader._check_volume(self.SYMBOL)  # should not raise
-
-    def test_raises_when_volume_below_absolute_minimum(self):
-        self.trader.exchange.fetch_ticker.return_value = {
-            "ask": 1.0,
-            "bid": 0.999,
-            "last": 1.0,
-            "quoteVolume": config.MIN_VOLUME_USD - 1.0,
-            "info": {},
-        }
+        self.trader.exchange.fetch_ticker.return_value = {"ask": 1.0, "last": 1.0}
         with self.assertRaises(InsufficientVolumeError):
             self.trader._check_volume(self.SYMBOL)
 
     def test_error_message_contains_symbol_and_amounts(self):
-        low_vol = _min_volume() / 2
+        low_vol = config.MIN_VOLUME_USD / 2
         _set_volume(self.trader, self.SYMBOL, low_vol)
         with self.assertRaises(InsufficientVolumeError) as ctx:
             self.trader._check_volume(self.SYMBOL)
@@ -836,180 +616,97 @@ class TestCheckVolume(unittest.TestCase):
 class TestVolumeIntegration(unittest.TestCase):
     """Volume check wired into buy() and should_buy()."""
 
-    SYMBOL = "BTC/USD"
+    SYMBOL = "BTC/USDT"
 
     def _make_trader_with_volume(self, quote_volume: float) -> CryptoTrader:
         trader = _make_trader()
-        trader.exchange.fetch_ticker.return_value = _make_ticker(50_000.0, quote_volume=quote_volume)
+        trader.exchange.fetch_ticker.return_value = {
+            "ask": 50_000.0,
+            "last": 50_000.0,
+            "quoteVolume": quote_volume,
+        }
         return trader
 
     # --- buy() ---
 
     def test_buy_raises_when_volume_insufficient(self):
-        trader = self._make_trader_with_volume(_min_volume() - 1.0)
+        trader = self._make_trader_with_volume(config.MIN_VOLUME_USD - 1.0)
         with self.assertRaises(InsufficientVolumeError):
             trader.buy(self.SYMBOL, 40.0)
         trader.exchange.create_market_buy_order.assert_not_called()
 
     def test_buy_succeeds_when_volume_sufficient(self):
-        trader = self._make_trader_with_volume(_min_volume() + 1.0)
+        trader = self._make_trader_with_volume(config.MIN_VOLUME_USD + 1.0)
         order = trader.buy(self.SYMBOL, 40.0)
         self.assertEqual(order["side"], "buy")
 
     # --- should_buy() ---
 
     def _bullish_indicators(self, trader):
-        """Patch get_indicators so all technical conditions fire for a buy signal."""
-        price = 110.0
+        """Patch get_indicators so the technical conditions fire."""
         trader.get_indicators = MagicMock(
-            return_value=_make_full_indicators(
-                price=price,
-                ema_200=100.0,        # price > ema_200 → bullish
-                ema_13=55.0,          # ema_13 > ema_48 → fresh crossover
-                ema_48=50.0,
-                prev_ema_13=49.0,     # prev_ema_13 <= prev_ema_48 → fresh crossover
-                prev_ema_48=50.0,
-            )
+            return_value={"price": 110.0, "ema200": 100.0, "rsi": 25.0}
         )
 
     def test_should_buy_false_when_volume_insufficient(self):
-        trader = self._make_trader_with_volume(_min_volume() - 1.0)
+        trader = self._make_trader_with_volume(config.MIN_VOLUME_USD - 1.0)
         self._bullish_indicators(trader)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
     def test_should_buy_true_when_volume_sufficient_and_signals_fire(self):
-        trader = self._make_trader_with_volume(_min_volume() + 1.0)
+        trader = self._make_trader_with_volume(config.MIN_VOLUME_USD + 1.0)
         self._bullish_indicators(trader)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
     def test_should_buy_false_when_volume_zero(self):
         trader = _make_trader()
-        trader.exchange.fetch_ticker.return_value = _make_ticker(110.0, quote_volume=0.0)
+        trader.exchange.fetch_ticker.return_value = {
+            "ask": 110.0,
+            "last": 110.0,
+            "quoteVolume": 0.0,
+        }
         self._bullish_indicators(trader)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
 
 # ---------------------------------------------------------------------------
-# Bid-ask spread check tests
+# USDT-pair validation tests
 # ---------------------------------------------------------------------------
 
-class TestCheckSpread(unittest.TestCase):
-    SYMBOL = "BTC/USD"
-    PRICE = 1_000.0
+class TestValidateUsdtPair(unittest.TestCase):
+    def test_valid_usdt_pair_passes(self):
+        CryptoTrader._validate_usdt_pair("BTC/USDT")   # should not raise
 
-    def setUp(self):
-        self.trader = _make_trader()
+    def test_valid_eth_usdt_passes(self):
+        CryptoTrader._validate_usdt_pair("ETH/USDT")   # should not raise
 
-    def _set_spread(self, bid: float) -> None:
-        self.trader.exchange.fetch_ticker.return_value = _make_ticker(self.PRICE, bid=bid)
+    def test_lowercase_usdt_passes(self):
+        CryptoTrader._validate_usdt_pair("btc/usdt")   # case-insensitive
 
-    def test_passes_when_spread_below_maximum(self):
-        # 0.1 % spread — well below 1 % max
-        self._set_spread(self.PRICE * (1.0 - 0.001))
-        self.trader._check_spread(self.SYMBOL)  # should not raise
-
-    def test_passes_when_spread_just_below_maximum(self):
-        # spread just under 1 %
-        bid = self.PRICE * (1.0 - (config.MAX_BID_ASK_SPREAD_PCT - 1e-6))
-        self._set_spread(bid)
-        self.trader._check_spread(self.SYMBOL)  # should not raise
-
-    def test_raises_when_spread_at_maximum(self):
-        # spread exactly at 1 % → should raise (>= threshold)
-        bid = self.PRICE * (1.0 - config.MAX_BID_ASK_SPREAD_PCT)
-        self._set_spread(bid)
-        with self.assertRaises(WideBidAskSpreadError):
-            self.trader._check_spread(self.SYMBOL)
-
-    def test_raises_when_spread_above_maximum(self):
-        # 1.5 % spread — above 1 % max
-        self._set_spread(self.PRICE * (1.0 - 0.015))
-        with self.assertRaises(WideBidAskSpreadError):
-            self.trader._check_spread(self.SYMBOL)
-
-    def test_raises_when_bid_is_none(self):
-        self.trader.exchange.fetch_ticker.return_value = _make_ticker(self.PRICE, bid=None)
-        # Override bid with None explicitly
-        self.trader.exchange.fetch_ticker.return_value["bid"] = None
-        with self.assertRaises(WideBidAskSpreadError):
-            self.trader._check_spread(self.SYMBOL)
-
-    def test_raises_when_bid_key_missing(self):
-        ticker = _make_ticker(self.PRICE)
-        del ticker["bid"]
-        self.trader.exchange.fetch_ticker.return_value = ticker
-        with self.assertRaises(WideBidAskSpreadError):
-            self.trader._check_spread(self.SYMBOL)
-
-    def test_error_message_contains_symbol(self):
-        self._set_spread(self.PRICE * (1.0 - 0.015))  # wide spread
-        with self.assertRaises(WideBidAskSpreadError) as ctx:
-            self.trader._check_spread(self.SYMBOL)
-        self.assertIn(self.SYMBOL, str(ctx.exception))
-
-    def test_buy_raises_when_spread_too_wide(self):
-        """buy() should raise WideBidAskSpreadError when spread ≥ MAX_BID_ASK_SPREAD_PCT."""
-        self._set_spread(self.PRICE * (1.0 - 0.015))
-        with self.assertRaises(WideBidAskSpreadError):
-            self.trader.buy(self.SYMBOL, 40.0)
-        self.trader.exchange.create_market_buy_order.assert_not_called()
-
-    def test_should_buy_false_when_spread_too_wide(self):
-        """should_buy() returns False when spread exceeds maximum."""
-        trader = _make_trader()
-        price = 110.0
-        trader.exchange.fetch_ticker.return_value = _make_ticker(
-            price, bid=price * (1.0 - 0.015)  # 1.5 % spread
-        )
-        trader.get_indicators = MagicMock(
-            return_value=_make_full_indicators(
-                price=price,
-                ema_200=100.0,
-                ema_13=55.0, ema_48=50.0,
-                prev_ema_13=49.0, prev_ema_48=50.0,
-            )
-        )
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
-
-# ---------------------------------------------------------------------------
-# USD-pair validation tests
-# ---------------------------------------------------------------------------
-
-class TestValidateUsdPair(unittest.TestCase):
-    def test_valid_usd_pair_passes(self):
-        CryptoTrader._validate_usd_pair("BTC/USD")   # should not raise
-
-    def test_valid_eth_usd_passes(self):
-        CryptoTrader._validate_usd_pair("ETH/USD")   # should not raise
-
-    def test_lowercase_usd_passes(self):
-        CryptoTrader._validate_usd_pair("btc/usd")   # case-insensitive
-
-    def test_non_usd_quote_raises(self):
+    def test_non_usdt_quote_raises(self):
         with self.assertRaises(ValueError):
-            CryptoTrader._validate_usd_pair("BTC/BTC")
+            CryptoTrader._validate_usdt_pair("BTC/BTC")
 
-    def test_btc_usdt_raises(self):
+    def test_btc_usd_raises(self):
         with self.assertRaises(ValueError):
-            CryptoTrader._validate_usd_pair("BTC/USDT")
+            CryptoTrader._validate_usdt_pair("BTC/USD")
 
     def test_btc_busd_raises(self):
         with self.assertRaises(ValueError):
-            CryptoTrader._validate_usd_pair("BTC/BUSD")
+            CryptoTrader._validate_usdt_pair("BTC/BUSD")
 
     def test_error_message_contains_symbol(self):
         with self.assertRaises(ValueError) as ctx:
-            CryptoTrader._validate_usd_pair("BTC/EUR")
+            CryptoTrader._validate_usdt_pair("BTC/EUR")
         self.assertIn("BTC/EUR", str(ctx.exception))
 
-    def test_buy_raises_for_non_usd_pair(self):
+    def test_buy_raises_for_non_usdt_pair(self):
         trader = _make_trader()
         with self.assertRaises(ValueError):
             trader.buy("BTC/BTC", 40.0)
         trader.exchange.create_market_buy_order.assert_not_called()
 
-    def test_sell_raises_for_non_usd_pair(self):
+    def test_sell_raises_for_non_usdt_pair(self):
         trader = _make_trader()
         with self.assertRaises(ValueError):
             trader.sell("BTC/EUR", 0.01)
@@ -1017,51 +714,55 @@ class TestValidateUsdPair(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# get_usd_balance tests
+# get_usdt_balance tests
 # ---------------------------------------------------------------------------
 
-class TestGetUsdBalance(unittest.TestCase):
+class TestGetUsdtBalance(unittest.TestCase):
     def setUp(self):
         self.trader = _make_trader()
 
     def _set_balance(self, free: float):
         self.trader.exchange.fetch_balance.return_value = {
-            "USD": {"free": free, "used": 0.0, "total": free}
+            "USDT": {"free": free, "used": 0.0, "total": free}
         }
 
-    def test_returns_free_usd_balance(self):
+    def test_returns_free_usdt_balance(self):
         self._set_balance(250.0)
-        self.assertAlmostEqual(self.trader.get_usd_balance(), 250.0)
+        self.assertAlmostEqual(self.trader.get_usdt_balance(), 250.0)
 
     def test_returns_zero_balance(self):
         self._set_balance(0.0)
-        self.assertAlmostEqual(self.trader.get_usd_balance(), 0.0)
+        self.assertAlmostEqual(self.trader.get_usdt_balance(), 0.0)
 
-    def test_raises_when_usd_key_missing(self):
+    def test_raises_when_usdt_key_missing(self):
         self.trader.exchange.fetch_balance.return_value = {}
         with self.assertRaises(RuntimeError):
-            self.trader.get_usd_balance()
+            self.trader.get_usdt_balance()
 
     def test_raises_when_free_key_missing(self):
-        self.trader.exchange.fetch_balance.return_value = {"USD": {"total": 100.0}}
+        self.trader.exchange.fetch_balance.return_value = {"USDT": {"total": 100.0}}
         with self.assertRaises(RuntimeError):
-            self.trader.get_usd_balance()
+            self.trader.get_usdt_balance()
 
 
 # ---------------------------------------------------------------------------
 # buy_max_orders tests
 # ---------------------------------------------------------------------------
 
-def _set_ticker_and_balance(trader: CryptoTrader, price: float, usd_free: float) -> None:
-    """Configure mocked exchange with a price ticker and a USD balance."""
-    trader.exchange.fetch_ticker.return_value = _make_ticker(price)
+def _set_ticker_and_balance(trader: CryptoTrader, price: float, usdt_free: float) -> None:
+    """Configure mocked exchange with a price ticker and a USDT balance."""
+    trader.exchange.fetch_ticker.return_value = {
+        "ask": price,
+        "last": price,
+        "quoteVolume": config.MIN_VOLUME_USD * 10,
+    }
     trader.exchange.fetch_balance.return_value = {
-        "USD": {"free": usd_free, "used": 0.0, "total": usd_free}
+        "USDT": {"free": usdt_free, "used": 0.0, "total": usdt_free}
     }
 
 
 class TestBuyMaxOrders(unittest.TestCase):
-    SYMBOL = "BTC/USD"
+    SYMBOL = "BTC/USDT"
     PRICE = 50_000.0
 
     def setUp(self):
@@ -1113,7 +814,7 @@ class TestBuyMaxOrders(unittest.TestCase):
         for order in orders:
             self.assertEqual(order["side"], "buy")
 
-    def test_raises_for_non_usd_symbol(self):
+    def test_raises_for_non_usdt_symbol(self):
         _set_ticker_and_balance(self.trader, self.PRICE, 200.0)
         with self.assertRaises(ValueError):
             self.trader.buy_max_orders("BTC/EUR")
@@ -1123,502 +824,6 @@ class TestBuyMaxOrders(unittest.TestCase):
         orders = self.trader.buy_max_orders(self.SYMBOL)
         for order in orders:
             self.assertTrue(order.get("paper"))
-
-
-# ---------------------------------------------------------------------------
-# buy_bundle tests
-# ---------------------------------------------------------------------------
-
-def _set_ticker_for_bundle(trader: CryptoTrader, price: float) -> None:
-    """Configure the mocked exchange to return *price* and sufficient volume/spread for any symbol."""
-    trader.exchange.fetch_ticker.return_value = _make_ticker(price)
-
-
-class TestBuyBundle(unittest.TestCase):
-    """Tests for CryptoTrader.buy_bundle()."""
-
-    PRICE = 1_000.0
-    AMOUNT = 40.0  # within MIN_BUY_ORDER .. MAX_BUY_ORDER
-
-    def setUp(self):
-        self.trader = _make_trader(paper_trading=True)
-        _set_ticker_for_bundle(self.trader, self.PRICE)
-
-    # --- happy path (paper trading) ---
-
-    def test_returns_order_for_every_symbol_in_bundle(self):
-        orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
-        for sym in config.BUNDLES["large_caps"]:
-            self.assertIn(sym, orders)
-
-    def test_each_order_is_a_buy(self):
-        orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
-        for order in orders.values():
-            self.assertEqual(order["side"], "buy")
-
-    def test_each_order_has_correct_cost(self):
-        orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
-        for order in orders.values():
-            self.assertAlmostEqual(order["cost"], self.AMOUNT)
-
-    def test_paper_orders_flagged(self):
-        orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
-        for order in orders.values():
-            self.assertTrue(order.get("paper"))
-
-    def test_returns_dict_not_list(self):
-        result = self.trader.buy_bundle("large_caps", self.AMOUNT)
-        self.assertIsInstance(result, dict)
-
-    # --- live trading ---
-
-    def test_live_trading_calls_exchange_per_symbol(self):
-        """In live mode, create_market_buy_order must be called once per symbol."""
-        live_trader = _make_trader(paper_trading=False)
-        _set_ticker_for_bundle(live_trader, self.PRICE)
-        live_trader.exchange.create_market_buy_order.return_value = {
-            "symbol": "X/USD",
-            "side": "buy",
-            "type": "market",
-            "amount": self.AMOUNT / self.PRICE,
-            "price": self.PRICE,
-            "cost": self.AMOUNT,
-            "status": "closed",
-        }
-        live_trader.buy_bundle("large_caps", self.AMOUNT)
-        expected_calls = len(config.BUNDLES["large_caps"])
-        self.assertEqual(
-            live_trader.exchange.create_market_buy_order.call_count,
-            expected_calls,
-        )
-
-    def test_live_order_returned_per_symbol(self):
-        """buy_bundle returns the exchange response for each symbol in live mode."""
-        live_trader = _make_trader(paper_trading=False)
-        _set_ticker_for_bundle(live_trader, self.PRICE)
-
-        def _fake_order(symbol, qty):
-            return {
-                "symbol": symbol,
-                "side": "buy",
-                "type": "market",
-                "amount": qty,
-                "price": self.PRICE,
-                "cost": qty * self.PRICE,
-                "status": "closed",
-            }
-
-        live_trader.exchange.create_market_buy_order.side_effect = _fake_order
-        orders = live_trader.buy_bundle("large_caps", self.AMOUNT)
-        self.assertEqual(set(orders.keys()), set(config.BUNDLES["large_caps"]))
-        for sym, order in orders.items():
-            self.assertEqual(order["symbol"], sym)
-
-    # --- unknown bundle ---
-
-    def test_unknown_bundle_raises_key_error(self):
-        with self.assertRaises(KeyError):
-            self.trader.buy_bundle("nonexistent_bundle", self.AMOUNT)
-
-    def test_key_error_message_contains_bundle_name(self):
-        with self.assertRaises(KeyError) as ctx:
-            self.trader.buy_bundle("nonexistent_bundle", self.AMOUNT)
-        self.assertIn("nonexistent_bundle", str(ctx.exception))
-
-    # --- partial failures are skipped ---
-
-    def test_insufficient_volume_symbol_is_skipped(self):
-        """A symbol with low volume is skipped; the rest of the bundle executes."""
-        symbols = config.BUNDLES["large_caps"]
-        low_vol_sym = symbols[0]
-        good_vol_sym = symbols[1]
-
-        def _ticker(symbol):
-            vol = 0.0 if symbol == low_vol_sym else _min_volume() * 10
-            return _make_ticker(self.PRICE, quote_volume=vol)
-
-        self.trader.exchange.fetch_ticker.side_effect = _ticker
-
-        orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
-        self.assertNotIn(low_vol_sym, orders)
-        self.assertIn(good_vol_sym, orders)
-
-    def test_order_size_error_symbol_is_skipped(self):
-        """An amount outside the allowed range skips all symbols in the bundle but raises nothing."""
-        trader = _make_trader(paper_trading=True)
-        _set_ticker_for_bundle(trader, self.PRICE)
-        # Use an amount that is below MIN_BUY_ORDER to trigger OrderSizeError
-        orders = trader.buy_bundle("large_caps", config.MIN_BUY_ORDER - 1.0)
-        self.assertEqual(orders, {})
-
-    def test_all_symbols_skipped_returns_empty_dict(self):
-        """If every symbol in the bundle is skipped, an empty dict is returned."""
-        self.trader.exchange.fetch_ticker.return_value = _make_ticker(
-            self.PRICE, quote_volume=0.0  # below minimum for every symbol
-        )
-        orders = self.trader.buy_bundle("large_caps", self.AMOUNT)
-        self.assertEqual(orders, {})
-
-    def test_defi_bundle_all_symbols_bought(self):
-        orders = self.trader.buy_bundle("defi", self.AMOUNT)
-        self.assertEqual(set(orders.keys()), set(config.BUNDLES["defi"]))
-
-    def test_layer1_bundle_all_symbols_bought(self):
-        orders = self.trader.buy_bundle("layer1", self.AMOUNT)
-        self.assertEqual(set(orders.keys()), set(config.BUNDLES["layer1"]))
-
-
-# ---------------------------------------------------------------------------
-# get_holdings tests
-# ---------------------------------------------------------------------------
-
-class TestGetHoldings(unittest.TestCase):
-    def setUp(self):
-        self.trader = _make_trader()
-
-    def _set_balance(self, raw: dict) -> None:
-        self.trader.exchange.fetch_balance.return_value = raw
-
-    def test_returns_non_usd_assets_with_positive_balance(self):
-        self._set_balance({
-            "USD": {"free": 100.0, "used": 0.0, "total": 100.0},
-            "BTC": {"free": 0.5, "used": 0.0, "total": 0.5},
-            "ETH": {"free": 2.0, "used": 0.0, "total": 2.0},
-        })
-        holdings = self.trader.get_holdings()
-        self.assertIn("BTC/USD", holdings)
-        self.assertIn("ETH/USD", holdings)
-
-    def test_excludes_usd(self):
-        self._set_balance({
-            "USD": {"free": 500.0, "used": 0.0, "total": 500.0},
-            "BTC": {"free": 1.0, "used": 0.0, "total": 1.0},
-        })
-        holdings = self.trader.get_holdings()
-        self.assertNotIn("USD/USD", holdings)
-        self.assertIn("BTC/USD", holdings)
-
-    def test_excludes_zero_balance(self):
-        self._set_balance({
-            "BTC": {"free": 0.0, "used": 0.0, "total": 0.0},
-            "ETH": {"free": 1.0, "used": 0.0, "total": 1.0},
-        })
-        holdings = self.trader.get_holdings()
-        self.assertNotIn("BTC/USD", holdings)
-        self.assertIn("ETH/USD", holdings)
-
-    def test_excludes_none_free_balance(self):
-        self._set_balance({
-            "BTC": {"free": None, "used": 0.0, "total": 0.0},
-        })
-        holdings = self.trader.get_holdings()
-        self.assertNotIn("BTC/USD", holdings)
-
-    def test_excludes_meta_keys(self):
-        self._set_balance({
-            "info": {"some": "data"},
-            "free": {"BTC": 0.5},
-            "used": {"BTC": 0.0},
-            "total": {"BTC": 0.5},
-            "datetime": "2024-01-01",
-            "timestamp": 1704067200000,
-            "BTC": {"free": 0.5, "used": 0.0, "total": 0.5},
-        })
-        holdings = self.trader.get_holdings()
-        # Only BTC/USD should appear; meta keys must not generate spurious entries
-        self.assertEqual(set(holdings.keys()), {"BTC/USD"})
-
-    def test_returns_correct_quantity(self):
-        self._set_balance({
-            "BTC": {"free": 0.12345678, "used": 0.0, "total": 0.12345678},
-        })
-        holdings = self.trader.get_holdings()
-        self.assertAlmostEqual(holdings["BTC/USD"]["quantity"], 0.12345678, places=8)
-
-    def test_returns_empty_dict_when_no_crypto(self):
-        self._set_balance({
-            "USD": {"free": 200.0, "used": 0.0, "total": 200.0},
-        })
-        holdings = self.trader.get_holdings()
-        self.assertEqual(holdings, {})
-
-    def test_returns_empty_dict_when_all_balances_zero(self):
-        self._set_balance({
-            "BTC": {"free": 0.0, "used": 0.0, "total": 0.0},
-            "ETH": {"free": 0.0, "used": 0.0, "total": 0.0},
-        })
-        holdings = self.trader.get_holdings()
-        self.assertEqual(holdings, {})
-
-    def test_symbol_format_is_base_slash_usd(self):
-        self._set_balance({
-            "SOL": {"free": 10.0, "used": 0.0, "total": 10.0},
-        })
-        holdings = self.trader.get_holdings()
-        self.assertIn("SOL/USD", holdings)
-
-    def test_quantity_key_present_in_each_entry(self):
-        self._set_balance({
-            "ETH": {"free": 3.0, "used": 0.0, "total": 3.0},
-        })
-        holdings = self.trader.get_holdings()
-        self.assertIn("quantity", holdings["ETH/USD"])
-
-    def test_non_dict_currency_value_is_skipped(self):
-        # ccxt sometimes includes top-level string/numeric values; they must be ignored
-        self._set_balance({
-            "BTC": {"free": 1.0, "used": 0.0, "total": 1.0},
-            "WEIRDKEY": "not-a-dict",
-        })
-        holdings = self.trader.get_holdings()
-        self.assertNotIn("WEIRDKEY/USD", holdings)
-        self.assertIn("BTC/USD", holdings)
-
-
-# ---------------------------------------------------------------------------
-# place_exit_orders tests
-# ---------------------------------------------------------------------------
-
-class TestPlaceExitOrders(unittest.TestCase):
-    """Tests for CryptoTrader.place_exit_orders."""
-
-    # ATR spread used in OHLCV mock: ATR = 2 * _ATR_SPREAD = 10.0
-    _ATR_SPREAD = 5.0
-    _ATR_VALUE = 2 * _ATR_SPREAD  # 10.0
-
-    def setUp(self):
-        self.trader = _make_trader(paper_trading=True)
-        # Provide ATR OHLCV data so place_exit_orders can compute ATR
-        n = config.ATR_PERIOD + 1
-        self.trader.exchange.fetch_ohlcv.return_value = _make_atr_ohlcv(
-            n, spread=self._ATR_SPREAD
-        )
-
-    # -- Paper-trading mode --------------------------------------------------
-
-    def test_paper_returns_none_order_ids(self):
-        result = self.trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
-        self.assertIsNone(result["take_profit_order_id"])
-        self.assertIsNone(result["stop_loss_order_id"])
-
-    def test_paper_tp_price_correct(self):
-        entry = 50_000.0
-        result = self.trader.place_exit_orders("BTC/USD", 0.001, entry)
-        expected = entry * (1.0 + config.TAKE_PROFIT_PCT)
-        self.assertAlmostEqual(result["take_profit_price"], expected)
-
-    def test_paper_sl_price_correct(self):
-        entry = 50_000.0
-        result = self.trader.place_exit_orders("BTC/USD", 0.001, entry)
-        expected = entry - config.ATR_STOP_LOSS_MULTIPLIER * self._ATR_VALUE
-        self.assertAlmostEqual(result["stop_loss_price"], expected)
-
-    def test_paper_does_not_call_create_order(self):
-        self.trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
-        self.trader.exchange.create_order.assert_not_called()
-
-    # -- Validation ----------------------------------------------------------
-
-    def test_raises_on_non_usd_pair(self):
-        with self.assertRaises(ValueError):
-            self.trader.place_exit_orders("BTC/EUR", 0.001, 50_000.0)
-
-    def test_raises_on_zero_entry_price(self):
-        with self.assertRaises(ValueError):
-            self.trader.place_exit_orders("BTC/USD", 0.001, 0.0)
-
-    def test_raises_on_negative_entry_price(self):
-        with self.assertRaises(ValueError):
-            self.trader.place_exit_orders("BTC/USD", 0.001, -1.0)
-
-    def test_raises_on_zero_quantity(self):
-        with self.assertRaises(ValueError):
-            self.trader.place_exit_orders("BTC/USD", 0.0, 50_000.0)
-
-    def test_raises_on_negative_quantity(self):
-        with self.assertRaises(ValueError):
-            self.trader.place_exit_orders("BTC/USD", -0.001, 50_000.0)
-
-    # -- Live-trading mode ---------------------------------------------------
-
-    def _make_live_trader(self):
-        trader = _make_trader(paper_trading=False)
-        trader.exchange.fetch_ohlcv.return_value = _make_atr_ohlcv(
-            config.ATR_PERIOD + 1, spread=self._ATR_SPREAD
-        )
-        return trader
-
-    def test_live_places_two_orders(self):
-        trader = self._make_live_trader()
-        tp_mock = {"id": "tp-123"}
-        sl_mock = {"id": "sl-456"}
-        trader.exchange.create_order.side_effect = [tp_mock, sl_mock]
-        result = trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
-        self.assertEqual(result["take_profit_order_id"], "tp-123")
-        self.assertEqual(result["stop_loss_order_id"], "sl-456")
-        self.assertEqual(trader.exchange.create_order.call_count, 2)
-
-    def test_live_tp_order_is_limit_sell(self):
-        trader = self._make_live_trader()
-        trader.exchange.create_order.return_value = {"id": "x"}
-        trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
-        tp_call = trader.exchange.create_order.call_args_list[0]
-        # args: symbol, order_type, side, quantity, price
-        self.assertEqual(tp_call.args[1], "limit")
-        self.assertEqual(tp_call.args[2], "sell")
-
-    def test_live_sl_order_uses_atr_stop_price(self):
-        trader = self._make_live_trader()
-        trader.exchange.create_order.return_value = {"id": "x"}
-        entry = 50_000.0
-        trader.place_exit_orders("BTC/USD", 0.001, entry)
-        sl_call = trader.exchange.create_order.call_args_list[1]
-        expected_sl_price = entry - config.ATR_STOP_LOSS_MULTIPLIER * self._ATR_VALUE
-        # price arg (index 4) should equal the ATR-based stop-loss price
-        self.assertAlmostEqual(sl_call.args[4], expected_sl_price)
-
-    def test_live_fallback_to_stopmarket_on_exception(self):
-        """If 'stop' order type fails the method falls back to 'stopMarket'."""
-        trader = self._make_live_trader()
-        tp_mock = {"id": "tp-1"}
-        sl_mock = {"id": "sl-2"}
-        trader.exchange.create_order.side_effect = [
-            tp_mock,                  # TP limit order succeeds
-            RuntimeError("unsupported order type"),  # first SL attempt fails
-            sl_mock,                  # fallback stopMarket succeeds
-        ]
-        result = trader.place_exit_orders("BTC/USD", 0.001, 50_000.0)
-        self.assertEqual(result["stop_loss_order_id"], "sl-2")
-        # 3 calls total: TP, failed stop, successful stopMarket
-        self.assertEqual(trader.exchange.create_order.call_count, 3)
-
-
-# ---------------------------------------------------------------------------
-# check_exit_orders tests
-# ---------------------------------------------------------------------------
-
-class TestCheckExitOrders(unittest.TestCase):
-    """Tests for CryptoTrader.check_exit_orders."""
-
-    def setUp(self):
-        self.trader = _make_trader(paper_trading=True)
-        self.entry = 50_000.0
-
-    def _set_price(self, price: float) -> None:
-        self.trader.exchange.fetch_ticker.return_value = _make_ticker(price)
-
-    # -- Fallback (None order IDs) -------------------------------------------
-
-    def test_fallback_hold_when_both_ids_none(self):
-        self._set_price(self.entry)
-        result = self.trader.check_exit_orders("BTC/USD", None, None, self.entry)
-        self.assertEqual(result, "hold")
-
-    def test_fallback_take_profit_when_both_ids_none(self):
-        tp_price = self.entry * (1.0 + config.TAKE_PROFIT_PCT)
-        self._set_price(tp_price)
-        result = self.trader.check_exit_orders("BTC/USD", None, None, self.entry)
-        self.assertEqual(result, "take_profit")
-
-    def test_fallback_stop_loss_when_both_ids_none(self):
-        sl_price = self.entry * (1.0 - config.STOP_LOSS_PCT)
-        self._set_price(sl_price)
-        result = self.trader.check_exit_orders("BTC/USD", None, None, self.entry)
-        self.assertEqual(result, "stop_loss")
-
-    # -- Exchange-order checks (live mode) -----------------------------------
-
-    def _make_live_trader(self):
-        return _make_trader(paper_trading=False)
-
-    def test_take_profit_order_filled_cancels_sl(self):
-        trader = self._make_live_trader()
-        trader.exchange.fetch_order.side_effect = [
-            {"status": "closed"},   # TP order filled
-            {"status": "open"},     # SL order still open
-        ]
-        result = trader.check_exit_orders("BTC/USD", "tp-1", "sl-2", self.entry)
-        self.assertEqual(result, "take_profit")
-        trader.exchange.cancel_order.assert_called_once_with("sl-2", "BTC/USD")
-
-    def test_stop_loss_order_filled_cancels_tp(self):
-        trader = self._make_live_trader()
-        trader.exchange.fetch_order.side_effect = [
-            {"status": "open"},     # TP order still open
-            {"status": "closed"},   # SL order filled
-        ]
-        result = trader.check_exit_orders("BTC/USD", "tp-1", "sl-2", self.entry)
-        self.assertEqual(result, "stop_loss")
-        trader.exchange.cancel_order.assert_called_once_with("tp-1", "BTC/USD")
-
-    def test_neither_filled_returns_hold(self):
-        trader = self._make_live_trader()
-        trader.exchange.fetch_order.return_value = {"status": "open"}
-        result = trader.check_exit_orders("BTC/USD", "tp-1", "sl-2", self.entry)
-        self.assertEqual(result, "hold")
-        trader.exchange.cancel_order.assert_not_called()
-
-    def test_fetch_order_exception_treated_as_not_filled(self):
-        trader = self._make_live_trader()
-        trader.exchange.fetch_order.side_effect = RuntimeError("network error")
-        result = trader.check_exit_orders("BTC/USD", "tp-1", "sl-2", self.entry)
-        self.assertEqual(result, "hold")
-
-    def test_cancel_order_exception_does_not_raise(self):
-        trader = self._make_live_trader()
-        trader.exchange.fetch_order.side_effect = [
-            {"status": "closed"},
-            {"status": "open"},
-        ]
-        trader.exchange.cancel_order.side_effect = RuntimeError("cancel failed")
-        # Should log a warning but not propagate the exception
-        result = trader.check_exit_orders("BTC/USD", "tp-1", "sl-2", self.entry)
-        self.assertEqual(result, "take_profit")
-
-
-# ---------------------------------------------------------------------------
-# Nonce tests
-# ---------------------------------------------------------------------------
-
-
-class TestMakeNonce(unittest.TestCase):
-    """Tests for the _make_nonce helper."""
-
-    def setUp(self):
-        # Reset module-level nonce state before each test so tests are
-        # independent of each other and of the wall-clock value.
-        import trader
-        trader._nonce_state[0] = 0
-
-    def test_nonce_is_positive(self):
-        from trader import _make_nonce
-        self.assertGreater(_make_nonce(), 0)
-
-    def test_nonce_uses_microseconds(self):
-        """The nonce should be in the microsecond range (>= 1e15 for any
-        timestamp after 2001-09-09), not the millisecond range (<= 1e13)."""
-        from trader import _make_nonce
-        nonce = _make_nonce()
-        # A microsecond-epoch timestamp for 2026 is roughly 1.7e15.
-        # A millisecond-epoch timestamp for the same year is roughly 1.7e12.
-        self.assertGreater(nonce, 1_000_000_000_000_000)  # > 1e15
-
-    def test_nonces_are_strictly_increasing(self):
-        from trader import _make_nonce
-        nonces = [_make_nonce() for _ in range(100)]
-        for a, b in zip(nonces, nonces[1:]):
-            self.assertGreater(b, a)
-
-    def test_nonce_monotonic_even_when_clock_frozen(self):
-        """If the clock does not advance, nonces must still increase."""
-        import trader
-        frozen_us = int(1_700_000_000 * 1_000_000)
-        with unittest.mock.patch("time.time", return_value=frozen_us / 1_000_000):
-            n1 = trader._make_nonce()
-            n2 = trader._make_nonce()
-            n3 = trader._make_nonce()
-        self.assertGreater(n2, n1)
-        self.assertGreater(n3, n2)
 
 
 if __name__ == "__main__":
