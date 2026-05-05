@@ -72,7 +72,7 @@ _nonce_state = [0]  # mutable container so the closure can update it
 def _make_nonce() -> int:
     with _nonce_lock:
         now = int(time.time() * 1000)
-        _nonce_state[0] = max(now, _nonce_state[0] + 1)
+        _nonce_state[0] = max(now, _nonce_state[0]) + 1
         return _nonce_state[0]
 
 
