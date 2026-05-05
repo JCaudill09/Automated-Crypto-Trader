@@ -711,9 +711,13 @@ class CryptoTrader:
             "ema_13": float, "ema_48": float,
             "prev_ema_13": float, "prev_ema_48": float}``
         """
-        # Need at least EMA_PERIOD candles for the 200 EMA, plus one extra
-        # to derive the previous bar's 13/48 EMA values.
-        limit = config.EMA_PERIOD + 10
+        # Fetch 3× the EMA period so the 200-period EMA has enough warm-up
+        # candles to track current price accurately.  A seed of only
+        # EMA_PERIOD candles leaves the EMA anchored to older prices because
+        # the EMA-200 multiplier (≈0.01) requires hundreds of additional bars
+        # to converge; too few warm-up bars cause the EMA to sit well above
+        # current prices during a recent pullback, permanently blocking buys.
+        limit = config.EMA_PERIOD * 3
         ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         closes = [candle[4] for candle in ohlcv]  # index 4 = close price
 
