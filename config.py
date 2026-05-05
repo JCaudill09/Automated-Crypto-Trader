@@ -26,16 +26,36 @@ MAX_POSITION_HOLD_SECONDS = 86400  # 24 hours
 TAKE_PROFIT_PCT = 0.065   # Close position when price rises 6.5 % above entry
 STOP_LOSS_PCT   = 0.0175  # Close position when price falls 1.75 % below entry
 
-# 200-period EMA — buy signal when price crosses above this line
-EMA_PERIOD = 200   # Long-term trend filter EMA period
-
-# 13/48 EMA crossover — buy signal when EMA 13 crosses above EMA 48
-EMA_CROSS_SHORT_PERIOD = 13   # Short-term EMA period for the crossover signal
-EMA_CROSS_LONG_PERIOD  = 48   # Long-term EMA period for the crossover signal
+# Technical indicator settings
+EMA_PERIOD     = 200   # 200-period Exponential Moving Average (utility; not used by buy signal)
+RSI_PERIOD     = 14    # RSI look-back period (Wilder smoothing)
+RSI_OVERSOLD   = 50    # RSI below this level → buy signal (< 50, momentum not yet overbought)
+RSI_OVERBOUGHT = 70    # RSI above this level → overbought (potential sell)
 
 # ATR (Average True Range) settings
 ATR_PERIOD              = 14   # Look-back period for ATR computation
 ATR_STOP_LOSS_MULTIPLIER = 1.5  # Stop-loss distance = ATR_STOP_LOSS_MULTIPLIER × ATR
+
+# EMA golden-cross signal — EMA 50 crossing above EMA 200 indicates a bullish trend
+SIMPLE_ALGO_SHORT_PERIOD = 50   # Short-term EMA period (EMA 50)
+SIMPLE_ALGO_LONG_PERIOD  = 200  # Long-term EMA period (EMA 200)
+
+# Bollinger Bands settings
+BB_PERIOD  = 20   # Look-back period for Bollinger Bands
+BB_NUM_STD = 1.5  # Number of standard deviations for the upper/lower bands
+
+# Keltner Channel settings
+KC_PERIOD     = 20   # EMA period and ATR period for Keltner Channels
+KC_MULTIPLIER = 2.5  # Upper/lower channel distance = KC_MULTIPLIER × ATR
+
+# Relative Volume (RVOL) settings
+# RVOL = current candle volume / average volume over the preceding RVOL_PERIOD candles.
+# A high RVOL indicates that the current candle is seeing unusually heavy participation.
+RVOL_PERIOD    = 20   # Number of prior candles used to compute the average volume
+RVOL_THRESHOLD = 5.0  # Buy signal requires current volume ≥ RVOL_THRESHOLD × average
+
+# Volume Profile HD settings
+VOLUME_PROFILE_BINS = 50  # Number of equal-width price bins for the volume profile
 
 # Asset types to include when discovering pairs from the exchange.
 # ccxt market dicts carry a ``type`` field (e.g. ``"spot"``, ``"swap"``,
@@ -50,15 +70,10 @@ ASSET_TYPES: list | None = None
 # How often (in seconds) to refresh the list of tradeable pairs from the exchange
 SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
 
-# Minimum 24-hour quote-currency volume (USD) required before a buy order is
-# placed or a buy signal is issued.  Any symbol whose 24-hour volume is below
-# this threshold is rejected as too illiquid.
-MIN_VOLUME_USD = 5_000.0  # $5,000
-
 # Maximum allowed bid-ask spread expressed as a fraction of the ask price.
 # A spread above this threshold indicates insufficient liquidity or a
 # market-maker-dominated book, and no buy order or buy signal is issued.
-MAX_BID_ASK_SPREAD_PCT = 0.0075  # 0.75 %
+MAX_BID_ASK_SPREAD_PCT = 0.005  # 0.5 %
 
 # ---------------------------------------------------------------------------
 # Order bundles
@@ -76,3 +91,5 @@ BUNDLES: dict = {
 # any symbol that belongs to a bundle triggers a buy for the entire bundle.
 # When False (default) the loop behaves exactly as before — single symbols.
 USE_BUNDLES = False
+
+
