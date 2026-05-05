@@ -572,7 +572,7 @@ class TestGetIndicators(unittest.TestCase):
 
     def test_fetch_ohlcv_called_with_correct_limit(self):
         self.trader.get_indicators(self.SYMBOL, timeframe="4h")
-        expected_limit = config.EMA_PERIOD + 10
+        expected_limit = config.EMA_PERIOD * 3
         self.trader.exchange.fetch_ohlcv.assert_called_once_with(
             self.SYMBOL, "4h", limit=expected_limit
         )
