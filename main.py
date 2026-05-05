@@ -20,6 +20,19 @@ logging.basicConfig(
 SYMBOL_REFRESH_INTERVAL = config.SYMBOL_REFRESH_INTERVAL
 
 
+def _retry_on_invalid_nonce(fn):
+    """Call fn(), retrying once after 1 s if the exchange rejects the nonce.
+
+    If the retry also raises, that exception propagates to the caller.
+    """
+    try:
+        return fn()
+    except ccxt.InvalidNonce:
+        logging.warning("Invalid nonce — retrying after 1 s")
+        time.sleep(1)
+        return fn()
+
+
 def main():
     api_key = os.environ.get("KRAKEN_API_KEY")
     api_secret = os.environ.get("KRAKEN_API_SECRET")
@@ -123,9 +136,24 @@ def main():
                             bundle_orders = bot.buy_bundle(bundle_name, order_size)
                             for sym, order in bundle_orders.items():
                                 if sym not in positions:
-                                    exit_orders = bot.place_exit_orders(
-                                        sym, order["amount"], order["price"]
-                                    )
+                                    try:
+                                        exit_orders = _retry_on_invalid_nonce(
+                                            lambda: bot.place_exit_orders(
+                                                sym, order["amount"], order["price"]
+                                            )
+                                        )
+                                    except Exception as exc:
+                                        logging.error(
+                                            "Could not place exit orders for %s after "
+                                            "retry (%s) — position tracked without "
+                                            "orders; price-based exit will apply.",
+                                            sym,
+                                            exc,
+                                        )
+                                        exit_orders = {
+                                            "take_profit_order_id": None,
+                                            "stop_loss_order_id": None,
+                                        }
                                     positions[sym] = {
                                         "entry_price": order["price"],
                                         "quantity": order["amount"],
@@ -145,10 +173,27 @@ def main():
                                     )
                         else:
                             order_size = min(config.MAX_BUY_ORDER, usd_balance)
-                            order = bot.buy(symbol, order_size)
-                            exit_orders = bot.place_exit_orders(
-                                symbol, order["amount"], order["price"]
+                            order = _retry_on_invalid_nonce(
+                                lambda: bot.buy(symbol, order_size)
                             )
+                            try:
+                                exit_orders = _retry_on_invalid_nonce(
+                                    lambda: bot.place_exit_orders(
+                                        symbol, order["amount"], order["price"]
+                                    )
+                                )
+                            except Exception as exc:
+                                logging.error(
+                                    "Could not place exit orders for %s after retry "
+                                    "(%s) — position tracked without orders; "
+                                    "price-based exit will apply.",
+                                    symbol,
+                                    exc,
+                                )
+                                exit_orders = {
+                                    "take_profit_order_id": None,
+                                    "stop_loss_order_id": None,
+                                }
                             positions[symbol] = {
                                 "entry_price": order["price"],
                                 "quantity": order["amount"],
