@@ -64,14 +64,19 @@ logger = logging.getLogger(__name__)
 # produce duplicate nonces when two requests are dispatched within the same
 # millisecond, causing "EAPI:Invalid nonce" errors.  The lock-protected counter
 # below guarantees uniqueness: it always advances to at least the current
-# millisecond, but never goes backward or repeats.
+# microsecond timestamp, but never goes backward or repeats.
+#
+# Using *microseconds* (rather than milliseconds) means that after a fast
+# restart the very first nonce of the new process will almost always be larger
+# than the last nonce issued by the previous process, eliminating the most
+# common source of "EAPI:Invalid nonce" errors on restart.
 _nonce_lock = threading.Lock()
 _nonce_state = [0]  # mutable container so the closure can update it
 
 
 def _make_nonce() -> int:
     with _nonce_lock:
-        now = int(time.time() * 1000)
+        now = int(time.time() * 1_000_000)  # microseconds for a larger seed
         _nonce_state[0] = max(now, _nonce_state[0]) + 1
         return _nonce_state[0]
 

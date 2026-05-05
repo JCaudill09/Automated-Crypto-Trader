@@ -201,6 +201,16 @@ def main():
                                 result, symbol, quantity, sell_order.get("price"),
                             )
                             del positions[symbol]
+            except ccxt.InvalidNonce as e:
+                # Nonce rejected by the exchange (e.g. after a fast restart or
+                # a clock correction).  Wait briefly so the microsecond-based
+                # nonce generator has time to advance past the server's counter,
+                # then retry the symbol on the next iteration — no action is
+                # taken this pass to avoid a double-buy.
+                logging.warning(
+                    "Invalid nonce for %s — will retry next iteration: %s", symbol, e
+                )
+                time.sleep(1)
             except ccxt.InsufficientFunds as e:
                 logging.warning("Insufficient funds for %s — order skipped: %s", symbol, e)
             except Exception as e:
