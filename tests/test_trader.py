@@ -1576,6 +1576,51 @@ class TestCheckExitOrders(unittest.TestCase):
         self.assertEqual(result, "take_profit")
 
 
+# ---------------------------------------------------------------------------
+# Nonce tests
+# ---------------------------------------------------------------------------
+
+
+class TestMakeNonce(unittest.TestCase):
+    """Tests for the _make_nonce helper."""
+
+    def setUp(self):
+        # Reset module-level nonce state before each test so tests are
+        # independent of each other and of the wall-clock value.
+        import trader
+        trader._nonce_state[0] = 0
+
+    def test_nonce_is_positive(self):
+        from trader import _make_nonce
+        self.assertGreater(_make_nonce(), 0)
+
+    def test_nonce_uses_microseconds(self):
+        """The nonce should be in the microsecond range (>= 1e15 for any
+        timestamp after 2001-09-09), not the millisecond range (<= 1e13)."""
+        from trader import _make_nonce
+        nonce = _make_nonce()
+        # A microsecond-epoch timestamp for 2026 is roughly 1.7e15.
+        # A millisecond-epoch timestamp for the same year is roughly 1.7e12.
+        self.assertGreater(nonce, 1_000_000_000_000_000)  # > 1e15
+
+    def test_nonces_are_strictly_increasing(self):
+        from trader import _make_nonce
+        nonces = [_make_nonce() for _ in range(100)]
+        for a, b in zip(nonces, nonces[1:]):
+            self.assertGreater(b, a)
+
+    def test_nonce_monotonic_even_when_clock_frozen(self):
+        """If the clock does not advance, nonces must still increase."""
+        import trader
+        frozen_us = int(1_700_000_000 * 1_000_000)
+        with unittest.mock.patch("time.time", return_value=frozen_us / 1_000_000):
+            n1 = trader._make_nonce()
+            n2 = trader._make_nonce()
+            n3 = trader._make_nonce()
+        self.assertGreater(n2, n1)
+        self.assertGreater(n3, n2)
+
+
 if __name__ == "__main__":
     unittest.main()
 
