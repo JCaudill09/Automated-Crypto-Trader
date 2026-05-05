@@ -46,6 +46,8 @@ without spending real money.
 """
 
 import logging
+import threading
+import time
 from typing import Optional
 
 import ccxt
@@ -53,6 +55,25 @@ import ccxt
 import config
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Monotonically increasing nonce
+# ---------------------------------------------------------------------------
+# Kraken requires each authenticated request to carry a nonce that is strictly
+# greater than the previous one.  The ccxt default (millisecond timestamp) can
+# produce duplicate nonces when two requests are dispatched within the same
+# millisecond, causing "EAPI:Invalid nonce" errors.  The lock-protected counter
+# below guarantees uniqueness: it always advances to at least the current
+# millisecond, but never goes backward or repeats.
+_nonce_lock = threading.Lock()
+_nonce_state = [0]  # mutable container so the closure can update it
+
+
+def _make_nonce() -> int:
+    with _nonce_lock:
+        now = int(time.time() * 1000)
+        _nonce_state[0] = max(now, _nonce_state[0] + 1)
+        return _nonce_state[0]
 
 
 class OrderSizeError(ValueError):
@@ -110,6 +131,7 @@ class CryptoTrader:
                 "apiKey": api_key,
                 "secret": api_secret,
                 "enableRateLimit": True,
+                "nonce": _make_nonce,
             }
         )
 
