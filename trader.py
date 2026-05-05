@@ -6,20 +6,15 @@ Buys and sells cryptocurrency through a ccxt-compatible exchange.
 Order constraints
 -----------------
 - Minimum buy order : $30 USD  (config.MIN_BUY_ORDER)
-- Maximum buy order : $50 USD  (config.MAX_BUY_ORDER)
+- Maximum buy order : $78 USD  (config.MAX_BUY_ORDER)
 
 Trade signals
 -------------
 - Buy  : price is above the 200-EMA **and** RSI is below the oversold
-         threshold (config.RSI_OVERSOLD, default 30).
-- Exit : take profit when price rises 7.5 % above entry
-         (config.TAKE_PROFIT_PCT); stop loss when price falls 2.5 % below
+         threshold (config.RSI_OVERSOLD, default 50).
+- Exit : take profit when price rises 6.5 % above entry
+         (config.TAKE_PROFIT_PCT); stop loss when price falls 1.75 % below
          entry (config.STOP_LOSS_PCT).
-
-- Volume  : buy orders and buy signals are only issued when the 24-hour
-           quote-currency volume exceeds ``config.MIN_VOLUME_USD`` (default
-           $1,000,000), ensuring there is sufficient liquidity to fill and
-           exit positions.
 
 Set PAPER_TRADING = True in config.py (the default) to simulate orders
 without spending real money.
@@ -38,9 +33,6 @@ logger = logging.getLogger(__name__)
 class OrderSizeError(ValueError):
     """Raised when a buy order amount is outside the allowed range."""
 
-
-class InsufficientVolumeError(RuntimeError):
-    """Raised when 24-hour quote volume is below the configured minimum."""
 
 
 class CryptoTrader:
@@ -152,48 +144,6 @@ class CryptoTrader:
             )
         return float(price)
 
-    def _check_volume(self, symbol: str) -> None:
-        """
-        Raise :class:`InsufficientVolumeError` if the 24-hour quote-currency
-        volume for *symbol* is below ``config.MIN_VOLUME_USD``.
-
-        The ``quoteVolume`` field from ``fetch_ticker`` represents the total
-        value traded over the last 24 hours expressed in the quote currency
-        (e.g. USDT for ``BTC/USDT``), making it a direct USD-denominated
-        liquidity measure.
-
-        Parameters
-        ----------
-        symbol :
-            Trading pair, e.g. ``"BTC/USDT"``.
-
-        Raises
-        ------
-        InsufficientVolumeError
-            If the reported 24-hour quote volume is below
-            ``config.MIN_VOLUME_USD`` or if the exchange does not return a
-            volume figure.
-        """
-        ticker = self.exchange.fetch_ticker(symbol)
-        volume = ticker.get("quoteVolume")
-        if not volume:
-            raise InsufficientVolumeError(
-                f"Unable to retrieve 24-hour quote volume for {symbol}. "
-                "Cannot verify sufficient liquidity."
-            )
-        volume = float(volume)
-        if volume < config.MIN_VOLUME_USD:
-            raise InsufficientVolumeError(
-                f"{symbol} 24-hour quote volume ${volume:,.2f} is below the "
-                f"required minimum of ${config.MIN_VOLUME_USD:,.2f}."
-            )
-        logger.debug(
-            "Volume check %s — quoteVolume=$%.2f (min=$%.2f) ✓",
-            symbol,
-            volume,
-            config.MIN_VOLUME_USD,
-        )
-
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -251,15 +201,11 @@ class CryptoTrader:
         ------
         OrderSizeError
             If *amount_usd* is outside the configured range.
-        InsufficientVolumeError
-            If the 24-hour quote volume for *symbol* is below
-            ``config.MIN_VOLUME_USD``.
         ValueError
             If *symbol* is not a USDT-quoted pair.
         """
         self._validate_usdt_pair(symbol)
         self._validate_buy_amount(amount_usd)
-        self._check_volume(symbol)
 
         price = self._get_price(symbol)
         quantity = amount_usd / price
@@ -553,21 +499,13 @@ class CryptoTrader:
         price_above_ema = indicators["price"] > indicators["ema200"]
         rsi_oversold = indicators["rsi"] < config.RSI_OVERSOLD
 
-        try:
-            self._check_volume(symbol)
-            volume_ok = True
-        except InsufficientVolumeError as exc:
-            logger.warning("should_buy %s — volume check failed: %s", symbol, exc)
-            volume_ok = False
-
-        signal = price_above_ema and rsi_oversold and volume_ok
+        signal = price_above_ema and rsi_oversold
 
         logger.info(
-            "should_buy %s — price_above_ema=%s rsi_oversold=%s volume_ok=%s → signal=%s",
+            "should_buy %s — price_above_ema=%s rsi_oversold=%s → signal=%s",
             symbol,
             price_above_ema,
             rsi_oversold,
-            volume_ok,
             signal,
         )
         return signal

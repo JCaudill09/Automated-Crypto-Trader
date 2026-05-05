@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import config
-from trader import CryptoTrader, OrderSizeError, InsufficientVolumeError
+from trader import CryptoTrader, OrderSizeError
 
 
 # ---------------------------------------------------------------------------
@@ -34,11 +34,10 @@ def _make_trader(**kwargs) -> CryptoTrader:
 
 
 def _set_price(trader: CryptoTrader, symbol: str, price: float) -> None:
-    """Configure the mocked exchange to return *price* and sufficient volume for *symbol*."""
+    """Configure the mocked exchange to return *price* for *symbol*."""
     trader.exchange.fetch_ticker.return_value = {
         "ask": price,
         "last": price,
-        "quoteVolume": config.MIN_VOLUME_USD * 10,
     }
 
 
@@ -55,17 +54,17 @@ class TestConfig(unittest.TestCase):
     def test_min_buy_order_is_30(self):
         self.assertEqual(config.MIN_BUY_ORDER, 30.0)
 
-    def test_max_buy_order_is_50(self):
-        self.assertEqual(config.MAX_BUY_ORDER, 50.0)
+    def test_max_buy_order_is_78(self):
+        self.assertEqual(config.MAX_BUY_ORDER, 78.0)
 
     def test_min_less_than_max(self):
         self.assertLess(config.MIN_BUY_ORDER, config.MAX_BUY_ORDER)
 
     def test_take_profit_pct(self):
-        self.assertAlmostEqual(config.TAKE_PROFIT_PCT, 0.075)
+        self.assertAlmostEqual(config.TAKE_PROFIT_PCT, 0.065)
 
     def test_stop_loss_pct(self):
-        self.assertAlmostEqual(config.STOP_LOSS_PCT, 0.025)
+        self.assertAlmostEqual(config.STOP_LOSS_PCT, 0.0175)
 
     def test_ema_period(self):
         self.assertEqual(config.EMA_PERIOD, 200)
@@ -74,13 +73,10 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.RSI_PERIOD, 14)
 
     def test_rsi_oversold(self):
-        self.assertEqual(config.RSI_OVERSOLD, 30)
+        self.assertEqual(config.RSI_OVERSOLD, 50)
 
     def test_rsi_overbought(self):
         self.assertEqual(config.RSI_OVERBOUGHT, 70)
-
-    def test_min_volume_usd_positive(self):
-        self.assertGreater(config.MIN_VOLUME_USD, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +187,7 @@ class TestOrderLimitValidation(unittest.TestCase):
 
     def test_buy_above_maximum_raises(self):
         with self.assertRaises(OrderSizeError):
-            self.trader._validate_buy_amount(50.01)
+            self.trader._validate_buy_amount(78.01)
 
     def test_buy_way_above_maximum_raises(self):
         with self.assertRaises(OrderSizeError):
@@ -203,10 +199,10 @@ class TestOrderLimitValidation(unittest.TestCase):
         self.trader._validate_buy_amount(30.0)   # should not raise
 
     def test_buy_at_maximum_is_valid(self):
-        self.trader._validate_buy_amount(50.0)   # should not raise
+        self.trader._validate_buy_amount(78.0)   # should not raise
 
     def test_buy_midrange_is_valid(self):
-        self.trader._validate_buy_amount(40.0)   # should not raise
+        self.trader._validate_buy_amount(50.0)   # should not raise
 
     def test_error_message_contains_amounts_when_below(self):
         with self.assertRaises(OrderSizeError) as ctx:
@@ -216,9 +212,9 @@ class TestOrderLimitValidation(unittest.TestCase):
 
     def test_error_message_contains_amounts_when_above(self):
         with self.assertRaises(OrderSizeError) as ctx:
-            self.trader._validate_buy_amount(75.0)
-        self.assertIn("75.00", str(ctx.exception))
-        self.assertIn("50.00", str(ctx.exception))
+            self.trader._validate_buy_amount(100.0)
+        self.assertIn("100.00", str(ctx.exception))
+        self.assertIn("78.00", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +262,7 @@ class TestPaperBuy(unittest.TestCase):
 
     def test_buy_above_max_raises_before_exchange_call(self):
         with self.assertRaises(OrderSizeError):
-            self.trader.buy(self.SYMBOL, 60.0)
+            self.trader.buy(self.SYMBOL, 80.0)
         self.trader.exchange.create_market_buy_order.assert_not_called()
 
 
@@ -462,11 +458,9 @@ class TestShouldBuy(unittest.TestCase):
         trader.get_indicators = MagicMock(
             return_value={"price": price, "ema200": ema200, "rsi": rsi}
         )
-        vol = quote_volume if quote_volume is not None else config.MIN_VOLUME_USD * 10
         trader.exchange.fetch_ticker.return_value = {
             "ask": price,
             "last": price,
-            "quoteVolume": vol,
         }
 
     def test_buy_signal_when_price_above_ema_and_rsi_oversold(self):
@@ -554,122 +548,6 @@ class TestCheckExit(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Volume check tests
-# ---------------------------------------------------------------------------
-
-def _set_volume(trader: CryptoTrader, symbol: str, quote_volume: float) -> None:
-    """Configure the mocked exchange to return *quote_volume* for *symbol*."""
-    trader.exchange.fetch_ticker.return_value = {
-        "ask": 1.0,
-        "last": 1.0,
-        "quoteVolume": quote_volume,
-    }
-
-
-class TestCheckVolume(unittest.TestCase):
-    SYMBOL = "BTC/USDT"
-
-    def setUp(self):
-        self.trader = _make_trader()
-
-    def test_passes_when_volume_above_minimum(self):
-        _set_volume(self.trader, self.SYMBOL, config.MIN_VOLUME_USD + 1.0)
-        self.trader._check_volume(self.SYMBOL)  # should not raise
-
-    def test_passes_when_volume_equals_minimum(self):
-        _set_volume(self.trader, self.SYMBOL, config.MIN_VOLUME_USD)
-        self.trader._check_volume(self.SYMBOL)  # should not raise
-
-    def test_raises_when_volume_below_minimum(self):
-        _set_volume(self.trader, self.SYMBOL, config.MIN_VOLUME_USD - 1.0)
-        with self.assertRaises(InsufficientVolumeError):
-            self.trader._check_volume(self.SYMBOL)
-
-    def test_raises_when_volume_is_zero(self):
-        _set_volume(self.trader, self.SYMBOL, 0.0)
-        with self.assertRaises(InsufficientVolumeError):
-            self.trader._check_volume(self.SYMBOL)
-
-    def test_raises_when_volume_is_none(self):
-        self.trader.exchange.fetch_ticker.return_value = {
-            "ask": 1.0,
-            "last": 1.0,
-            "quoteVolume": None,
-        }
-        with self.assertRaises(InsufficientVolumeError):
-            self.trader._check_volume(self.SYMBOL)
-
-    def test_raises_when_quoteVolume_key_missing(self):
-        self.trader.exchange.fetch_ticker.return_value = {"ask": 1.0, "last": 1.0}
-        with self.assertRaises(InsufficientVolumeError):
-            self.trader._check_volume(self.SYMBOL)
-
-    def test_error_message_contains_symbol_and_amounts(self):
-        low_vol = config.MIN_VOLUME_USD / 2
-        _set_volume(self.trader, self.SYMBOL, low_vol)
-        with self.assertRaises(InsufficientVolumeError) as ctx:
-            self.trader._check_volume(self.SYMBOL)
-        msg = str(ctx.exception)
-        self.assertIn(self.SYMBOL, msg)
-
-
-class TestVolumeIntegration(unittest.TestCase):
-    """Volume check wired into buy() and should_buy()."""
-
-    SYMBOL = "BTC/USDT"
-
-    def _make_trader_with_volume(self, quote_volume: float) -> CryptoTrader:
-        trader = _make_trader()
-        trader.exchange.fetch_ticker.return_value = {
-            "ask": 50_000.0,
-            "last": 50_000.0,
-            "quoteVolume": quote_volume,
-        }
-        return trader
-
-    # --- buy() ---
-
-    def test_buy_raises_when_volume_insufficient(self):
-        trader = self._make_trader_with_volume(config.MIN_VOLUME_USD - 1.0)
-        with self.assertRaises(InsufficientVolumeError):
-            trader.buy(self.SYMBOL, 40.0)
-        trader.exchange.create_market_buy_order.assert_not_called()
-
-    def test_buy_succeeds_when_volume_sufficient(self):
-        trader = self._make_trader_with_volume(config.MIN_VOLUME_USD + 1.0)
-        order = trader.buy(self.SYMBOL, 40.0)
-        self.assertEqual(order["side"], "buy")
-
-    # --- should_buy() ---
-
-    def _bullish_indicators(self, trader):
-        """Patch get_indicators so the technical conditions fire."""
-        trader.get_indicators = MagicMock(
-            return_value={"price": 110.0, "ema200": 100.0, "rsi": 25.0}
-        )
-
-    def test_should_buy_false_when_volume_insufficient(self):
-        trader = self._make_trader_with_volume(config.MIN_VOLUME_USD - 1.0)
-        self._bullish_indicators(trader)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
-    def test_should_buy_true_when_volume_sufficient_and_signals_fire(self):
-        trader = self._make_trader_with_volume(config.MIN_VOLUME_USD + 1.0)
-        self._bullish_indicators(trader)
-        self.assertTrue(trader.should_buy(self.SYMBOL))
-
-    def test_should_buy_false_when_volume_zero(self):
-        trader = _make_trader()
-        trader.exchange.fetch_ticker.return_value = {
-            "ask": 110.0,
-            "last": 110.0,
-            "quoteVolume": 0.0,
-        }
-        self._bullish_indicators(trader)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
-
-# ---------------------------------------------------------------------------
 # USDT-pair validation tests
 # ---------------------------------------------------------------------------
 
@@ -754,7 +632,6 @@ def _set_ticker_and_balance(trader: CryptoTrader, price: float, usdt_free: float
     trader.exchange.fetch_ticker.return_value = {
         "ask": price,
         "last": price,
-        "quoteVolume": config.MIN_VOLUME_USD * 10,
     }
     trader.exchange.fetch_balance.return_value = {
         "USDT": {"free": usdt_free, "used": 0.0, "total": usdt_free}
