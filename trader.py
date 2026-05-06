@@ -10,8 +10,7 @@ Order constraints
 
 Trade signals
 -------------
-- Buy  : price is above the 200-EMA **and** RSI is below the oversold
-         threshold (config.RSI_OVERSOLD, default 50).
+- Buy  : 20-EMA crosses **above** the 50-EMA (bullish crossover).
 - Exit : take profit when price rises 6.5 % above entry
          (config.TAKE_PROFIT_PCT); stop loss when price falls 1.75 % below
          entry (config.STOP_LOSS_PCT).
@@ -459,34 +458,42 @@ class CryptoTrader:
         Returns
         -------
         dict
-            ``{"price": float, "ema200": float, "rsi": float}``
+            ``{"price": float, "ema20": float, "ema50": float,
+               "prev_ema20": float, "prev_ema50": float}``
         """
-        limit = config.EMA_PERIOD + config.RSI_PERIOD + 10
+        limit = config.SIMPLE_ALGO_LONG_PERIOD + 10
         ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         closes = [candle[4] for candle in ohlcv]  # index 4 = close price
 
-        ema200 = self._compute_ema(closes, config.EMA_PERIOD)
-        rsi = self._compute_rsi(closes, config.RSI_PERIOD)
+        ema20 = self._compute_ema(closes, config.SIMPLE_ALGO_SHORT_PERIOD)
+        ema50 = self._compute_ema(closes, config.SIMPLE_ALGO_LONG_PERIOD)
+        prev_ema20 = self._compute_ema(closes[:-1], config.SIMPLE_ALGO_SHORT_PERIOD)
+        prev_ema50 = self._compute_ema(closes[:-1], config.SIMPLE_ALGO_LONG_PERIOD)
         current_price = closes[-1]
 
         logger.debug(
-            "Indicators %s — price=%.4f EMA200=%.4f RSI=%.2f",
+            "Indicators %s — price=%.4f EMA20=%.4f EMA50=%.4f",
             symbol,
             current_price,
-            ema200,
-            rsi,
+            ema20,
+            ema50,
         )
-        return {"price": current_price, "ema200": ema200, "rsi": rsi}
+        return {
+            "price": current_price,
+            "ema20": ema20,
+            "ema50": ema50,
+            "prev_ema20": prev_ema20,
+            "prev_ema50": prev_ema50,
+        }
 
     def should_buy(self, symbol: str, timeframe: str = "1h") -> bool:
         """
-        Return ``True`` when the buy signal fires.
+        Return ``True`` when the 20-EMA crosses above the 50-EMA.
 
-        Buy conditions (both must be met):
+        Buy condition:
 
-        1. Current price is **above** the 200-EMA → confirmed uptrend.
-        2. RSI is **below** ``config.RSI_OVERSOLD`` (default 50) →
-           the asset is in a pullback, offering a potential entry.
+        On the previous candle EMA-20 was at or below EMA-50, and on the
+        current candle EMA-20 is above EMA-50 (bullish crossover).
 
         Parameters
         ----------
@@ -496,19 +503,21 @@ class CryptoTrader:
             Candle interval accepted by the exchange (default ``"1h"``).
         """
         indicators = self.get_indicators(symbol, timeframe)
-        price_above_ema = indicators["price"] > indicators["ema200"]
-        rsi_oversold = indicators["rsi"] < config.RSI_OVERSOLD
-
-        signal = price_above_ema and rsi_oversold
+        crossed_above = (
+            indicators["prev_ema20"] <= indicators["prev_ema50"]
+            and indicators["ema20"] > indicators["ema50"]
+        )
 
         logger.info(
-            "should_buy %s — price_above_ema=%s rsi_oversold=%s → signal=%s",
+            "should_buy %s — ema20=%.4f ema50=%.4f prev_ema20=%.4f prev_ema50=%.4f → signal=%s",
             symbol,
-            price_above_ema,
-            rsi_oversold,
-            signal,
+            indicators["ema20"],
+            indicators["ema50"],
+            indicators["prev_ema20"],
+            indicators["prev_ema50"],
+            crossed_above,
         )
-        return signal
+        return crossed_above
 
     def check_exit(self, symbol: str, entry_price: float) -> str:
         """
