@@ -1,8 +1,7 @@
 """
 Configuration settings for the Automated Crypto Trader.
 
-Kraken supports trading of cryptocurrencies via USD-quoted pairs
-(e.g. ``"BTC/USD"``, ``"ETH/USD"``).
+The bot trades USDT-quoted pairs (e.g. ``"BTC/USDT"``, ``"ETH/USDT"``).
 """
 
 # Order size limits (in USD)
@@ -13,7 +12,7 @@ MAX_BUY_ORDER = 78.0   # Maximum buy order amount in USD
 DEFAULT_EXCHANGE = "kraken"
 
 # Default crypto trading pairs to monitor
-DEFAULT_SYMBOLS = ["BTC/USD", "ETH/USD"]
+DEFAULT_SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 
 # Paper trading mode — when True, no real orders are placed
 PAPER_TRADING = False

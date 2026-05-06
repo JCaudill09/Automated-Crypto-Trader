@@ -485,8 +485,8 @@ class CryptoTrader:
         Buy conditions (both must be met):
 
         1. Current price is **above** the 200-EMA → confirmed uptrend.
-        2. RSI is **below** ``config.RSI_OVERSOLD`` (default 30) →
-           the asset is oversold, offering a potential entry.
+        2. RSI is **below** ``config.RSI_OVERSOLD`` (default 50) →
+           the asset is in a pullback, offering a potential entry.
 
         Parameters
         ----------
