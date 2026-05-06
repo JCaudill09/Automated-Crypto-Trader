@@ -11,7 +11,7 @@ Order constraints
 Trade signals
 -------------
 - Buy  : 20-EMA crosses **above** the 50-EMA (bullish crossover) **and**
-         RSI is below ``config.RSI_OVERSOLD`` (default 50).
+         RSI is below ``config.RSI_BUY_THRESHOLD`` (default 70).
 - Exit : take profit when price rises 6.5 % above entry
          (config.TAKE_PROFIT_PCT); stop loss when price falls 1.75 % below
          entry (config.STOP_LOSS_PCT).
@@ -501,7 +501,7 @@ class CryptoTrader:
         1. 20-EMA crosses **above** the 50-EMA (bullish crossover): on the
            previous candle EMA-20 was at or below EMA-50, and on the current
            candle EMA-20 is above EMA-50.
-        2. RSI is **below** ``config.RSI_OVERSOLD`` (default 50) →
+        2. RSI is **below** ``config.RSI_BUY_THRESHOLD`` (default 70) →
            momentum has not yet become overbought.
 
         Parameters
@@ -516,7 +516,7 @@ class CryptoTrader:
             indicators["prev_ema20"] <= indicators["prev_ema50"]
             and indicators["ema20"] > indicators["ema50"]
         )
-        rsi_below = indicators["rsi"] < config.RSI_OVERSOLD
+        rsi_below = indicators["rsi"] < config.RSI_BUY_THRESHOLD
 
         signal = crossed_above and rsi_below
 

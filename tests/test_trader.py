@@ -72,8 +72,8 @@ class TestConfig(unittest.TestCase):
     def test_rsi_period(self):
         self.assertEqual(config.RSI_PERIOD, 14)
 
-    def test_rsi_oversold(self):
-        self.assertEqual(config.RSI_OVERSOLD, 50)
+    def test_rsi_buy_threshold(self):
+        self.assertEqual(config.RSI_BUY_THRESHOLD, 70)
 
     def test_rsi_overbought(self):
         self.assertEqual(config.RSI_OVERBOUGHT, 70)
@@ -485,21 +485,21 @@ class TestShouldBuy(unittest.TestCase):
                              prev_ema20=100.0, prev_ema50=100.0, rsi=45.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_crossover_but_rsi_at_50(self):
-        # Crossover fires but RSI is exactly 50 (must be strictly below)
+    def test_no_signal_when_crossover_but_rsi_at_threshold(self):
+        # Crossover fires but RSI is exactly at RSI_BUY_THRESHOLD (must be strictly below)
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
                              ema20=105.0, ema50=100.0,
                              prev_ema20=95.0, prev_ema50=100.0,
-                             rsi=config.RSI_OVERSOLD)
+                             rsi=config.RSI_BUY_THRESHOLD)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_crossover_but_rsi_above_50(self):
-        # Crossover fires but RSI is above 50 → no signal
+    def test_no_signal_when_crossover_but_rsi_above_70(self):
+        # Crossover fires but RSI is above 70 (overbought) → no signal
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
                              ema20=105.0, ema50=100.0,
-                             prev_ema20=95.0, prev_ema50=100.0, rsi=60.0)
+                             prev_ema20=95.0, prev_ema50=100.0, rsi=75.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
     def test_no_signal_when_ema20_already_above_ema50(self):
