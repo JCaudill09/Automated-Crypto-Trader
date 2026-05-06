@@ -1,8 +1,7 @@
 """
 Configuration settings for the Automated Crypto Trader.
 
-Kraken supports trading of cryptocurrencies via USD-quoted pairs
-(e.g. ``"BTC/USD"``, ``"ETH/USD"``).
+The bot trades USDT-quoted pairs (e.g. ``"BTC/USDT"``, ``"ETH/USDT"``).
 """
 
 # Order size limits (in USD)
@@ -13,7 +12,7 @@ MAX_BUY_ORDER = 78.0   # Maximum buy order amount in USD
 DEFAULT_EXCHANGE = "kraken"
 
 # Default crypto trading pairs to monitor
-DEFAULT_SYMBOLS = ["BTC/USD", "ETH/USD"]
+DEFAULT_SYMBOLS = ["BTC/USDT", "ETH/USDT"]
 
 # Paper trading mode — when True, no real orders are placed
 PAPER_TRADING = False
@@ -36,9 +35,9 @@ RSI_OVERBOUGHT = 70    # RSI above this level → overbought (potential sell)
 ATR_PERIOD              = 14   # Look-back period for ATR computation
 ATR_STOP_LOSS_MULTIPLIER = 1.5  # Stop-loss distance = ATR_STOP_LOSS_MULTIPLIER × ATR
 
-# EMA golden-cross signal — EMA 50 crossing above EMA 200 indicates a bullish trend
-SIMPLE_ALGO_SHORT_PERIOD = 50   # Short-term EMA period (EMA 50)
-SIMPLE_ALGO_LONG_PERIOD  = 200  # Long-term EMA period (EMA 200)
+# EMA golden-cross signal — EMA 20 crossing above EMA 50 indicates a bullish trend
+SIMPLE_ALGO_SHORT_PERIOD = 20   # Short-term EMA period (EMA 20)
+SIMPLE_ALGO_LONG_PERIOD  = 50   # Long-term EMA period (EMA 50)
 
 # Bollinger Bands settings
 BB_PERIOD  = 20   # Look-back period for Bollinger Bands

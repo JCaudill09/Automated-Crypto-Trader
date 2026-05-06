@@ -10,8 +10,8 @@ Order constraints
 
 Trade signals
 -------------
-- Buy  : price is above the 200-EMA **and** RSI is below the oversold
-         threshold (config.RSI_OVERSOLD, default 50).
+- Buy  : 20-EMA crosses **above** the 50-EMA (bullish crossover) **and**
+         RSI is below ``config.RSI_OVERSOLD`` (default 50).
 - Exit : take profit when price rises 6.5 % above entry
          (config.TAKE_PROFIT_PCT); stop loss when price falls 1.75 % below
          entry (config.STOP_LOSS_PCT).
@@ -459,24 +459,36 @@ class CryptoTrader:
         Returns
         -------
         dict
-            ``{"price": float, "ema200": float, "rsi": float}``
+            ``{"price": float, "ema20": float, "ema50": float,
+               "prev_ema20": float, "prev_ema50": float, "rsi": float}``
         """
-        limit = config.EMA_PERIOD + config.RSI_PERIOD + 10
+        limit = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10
         ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         closes = [candle[4] for candle in ohlcv]  # index 4 = close price
 
-        ema200 = self._compute_ema(closes, config.EMA_PERIOD)
+        ema20 = self._compute_ema(closes, config.SIMPLE_ALGO_SHORT_PERIOD)
+        ema50 = self._compute_ema(closes, config.SIMPLE_ALGO_LONG_PERIOD)
+        prev_ema20 = self._compute_ema(closes[:-1], config.SIMPLE_ALGO_SHORT_PERIOD)
+        prev_ema50 = self._compute_ema(closes[:-1], config.SIMPLE_ALGO_LONG_PERIOD)
         rsi = self._compute_rsi(closes, config.RSI_PERIOD)
         current_price = closes[-1]
 
         logger.debug(
-            "Indicators %s — price=%.4f EMA200=%.4f RSI=%.2f",
+            "Indicators %s — price=%.4f EMA20=%.4f EMA50=%.4f RSI=%.2f",
             symbol,
             current_price,
-            ema200,
+            ema20,
+            ema50,
             rsi,
         )
-        return {"price": current_price, "ema200": ema200, "rsi": rsi}
+        return {
+            "price": current_price,
+            "ema20": ema20,
+            "ema50": ema50,
+            "prev_ema20": prev_ema20,
+            "prev_ema50": prev_ema50,
+            "rsi": rsi,
+        }
 
     def should_buy(self, symbol: str, timeframe: str = "1h") -> bool:
         """
@@ -484,9 +496,11 @@ class CryptoTrader:
 
         Buy conditions (both must be met):
 
-        1. Current price is **above** the 200-EMA → confirmed uptrend.
-        2. RSI is **below** ``config.RSI_OVERSOLD`` (default 30) →
-           the asset is oversold, offering a potential entry.
+        1. 20-EMA crosses **above** the 50-EMA (bullish crossover): on the
+           previous candle EMA-20 was at or below EMA-50, and on the current
+           candle EMA-20 is above EMA-50.
+        2. RSI is **below** ``config.RSI_OVERSOLD`` (default 50) →
+           momentum has not yet become overbought.
 
         Parameters
         ----------
@@ -496,16 +510,25 @@ class CryptoTrader:
             Candle interval accepted by the exchange (default ``"1h"``).
         """
         indicators = self.get_indicators(symbol, timeframe)
-        price_above_ema = indicators["price"] > indicators["ema200"]
-        rsi_oversold = indicators["rsi"] < config.RSI_OVERSOLD
+        crossed_above = (
+            indicators["prev_ema20"] <= indicators["prev_ema50"]
+            and indicators["ema20"] > indicators["ema50"]
+        )
+        rsi_below = indicators["rsi"] < config.RSI_OVERSOLD
 
-        signal = price_above_ema and rsi_oversold
+        signal = crossed_above and rsi_below
 
         logger.info(
-            "should_buy %s — price_above_ema=%s rsi_oversold=%s → signal=%s",
+            "should_buy %s — ema20=%.4f ema50=%.4f prev_ema20=%.4f prev_ema50=%.4f "
+            "rsi=%.2f → crossed_above=%s rsi_below=%s signal=%s",
             symbol,
-            price_above_ema,
-            rsi_oversold,
+            indicators["ema20"],
+            indicators["ema50"],
+            indicators["prev_ema20"],
+            indicators["prev_ema50"],
+            indicators["rsi"],
+            crossed_above,
+            rsi_below,
             signal,
         )
         return signal
