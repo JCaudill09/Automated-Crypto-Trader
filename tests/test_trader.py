@@ -420,21 +420,22 @@ class TestGetIndicators(unittest.TestCase):
 
     def setUp(self):
         self.trader = _make_trader()
-        # Build enough synthetic closes for EMA-20 and EMA-50 (current + previous)
-        n = config.SIMPLE_ALGO_LONG_PERIOD + 10
+        # Build enough synthetic closes for EMA-20, EMA-50, and RSI
+        n = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10
         closes = [float(i) for i in range(1, n + 1)]
         self.trader.exchange.fetch_ohlcv.return_value = _make_ohlcv(closes)
 
-    def test_returns_price_ema20_ema50_keys(self):
+    def test_returns_price_ema20_ema50_rsi_keys(self):
         result = self.trader.get_indicators(self.SYMBOL)
         self.assertIn("price", result)
         self.assertIn("ema20", result)
         self.assertIn("ema50", result)
         self.assertIn("prev_ema20", result)
         self.assertIn("prev_ema50", result)
+        self.assertIn("rsi", result)
 
     def test_price_equals_last_close(self):
-        n = config.SIMPLE_ALGO_LONG_PERIOD + 10
+        n = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10
         closes = [float(i) for i in range(1, n + 1)]
         self.trader.exchange.fetch_ohlcv.return_value = _make_ohlcv(closes)
         result = self.trader.get_indicators(self.SYMBOL)
@@ -442,7 +443,7 @@ class TestGetIndicators(unittest.TestCase):
 
     def test_fetch_ohlcv_called_with_correct_limit(self):
         self.trader.get_indicators(self.SYMBOL, timeframe="4h")
-        expected_limit = config.SIMPLE_ALGO_LONG_PERIOD + 10
+        expected_limit = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10
         self.trader.exchange.fetch_ohlcv.assert_called_once_with(
             self.SYMBOL, "4h", limit=expected_limit
         )
@@ -455,8 +456,8 @@ class TestGetIndicators(unittest.TestCase):
 class TestShouldBuy(unittest.TestCase):
     SYMBOL = "BTC/USDT"
 
-    def _set_indicators(self, trader, price, ema20, ema50, prev_ema20, prev_ema50):
-        """Patch get_indicators to return controlled EMA crossover values."""
+    def _set_indicators(self, trader, price, ema20, ema50, prev_ema20, prev_ema50, rsi):
+        """Patch get_indicators to return controlled EMA crossover and RSI values."""
         trader.get_indicators = MagicMock(
             return_value={
                 "price": price,
@@ -464,31 +465,49 @@ class TestShouldBuy(unittest.TestCase):
                 "ema50": ema50,
                 "prev_ema20": prev_ema20,
                 "prev_ema50": prev_ema50,
+                "rsi": rsi,
             }
         )
 
-    def test_buy_signal_on_ema20_crossing_above_ema50(self):
-        # prev: ema20 below ema50; current: ema20 above ema50 → crossover
+    def test_buy_signal_on_crossover_with_rsi_below_50(self):
+        # prev: ema20 below ema50; current: ema20 above ema50; rsi < 50 → signal
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
                              ema20=105.0, ema50=100.0,
-                             prev_ema20=95.0, prev_ema50=100.0)
+                             prev_ema20=95.0, prev_ema50=100.0, rsi=40.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
     def test_buy_signal_when_prev_ema20_exactly_equals_prev_ema50(self):
-        # prev_ema20 == prev_ema50 (touching), current ema20 > ema50 → signal fires
+        # prev_ema20 == prev_ema50 (touching), current ema20 > ema50; rsi < 50 → signal
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
                              ema20=105.0, ema50=100.0,
-                             prev_ema20=100.0, prev_ema50=100.0)
+                             prev_ema20=100.0, prev_ema50=100.0, rsi=45.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
+    def test_no_signal_when_crossover_but_rsi_at_50(self):
+        # Crossover fires but RSI is exactly 50 (must be strictly below)
+        trader = _make_trader()
+        self._set_indicators(trader, price=110.0,
+                             ema20=105.0, ema50=100.0,
+                             prev_ema20=95.0, prev_ema50=100.0,
+                             rsi=config.RSI_OVERSOLD)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_crossover_but_rsi_above_50(self):
+        # Crossover fires but RSI is above 50 → no signal
+        trader = _make_trader()
+        self._set_indicators(trader, price=110.0,
+                             ema20=105.0, ema50=100.0,
+                             prev_ema20=95.0, prev_ema50=100.0, rsi=60.0)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
     def test_no_signal_when_ema20_already_above_ema50(self):
-        # Both candles have ema20 > ema50 — already crossed, not a new cross
+        # Already crossed (no new cross), even with rsi < 50
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
                              ema20=108.0, ema50=100.0,
-                             prev_ema20=105.0, prev_ema50=100.0)
+                             prev_ema20=105.0, prev_ema50=100.0, rsi=40.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
     def test_no_signal_when_ema20_below_ema50(self):
@@ -496,15 +515,15 @@ class TestShouldBuy(unittest.TestCase):
         trader = _make_trader()
         self._set_indicators(trader, price=90.0,
                              ema20=95.0, ema50=100.0,
-                             prev_ema20=93.0, prev_ema50=100.0)
+                             prev_ema20=93.0, prev_ema50=100.0, rsi=40.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
     def test_no_signal_on_death_cross(self):
-        # prev: ema20 above ema50; current: ema20 below ema50 → death cross, not buy
+        # prev: ema20 above ema50; current: ema20 below ema50 → death cross
         trader = _make_trader()
         self._set_indicators(trader, price=90.0,
                              ema20=95.0, ema50=100.0,
-                             prev_ema20=105.0, prev_ema50=100.0)
+                             prev_ema20=105.0, prev_ema50=100.0, rsi=40.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
 
