@@ -147,7 +147,7 @@ class TestGetUsdSymbols(unittest.TestCase):
 
     def test_raises_when_no_usd_pairs_found(self):
         self._set_markets({
-            "BTC/USDT": {"quote": "USDT", "active": True},
+            "BTC/EUR": {"quote": "EUR", "active": True},
         })
         with self.assertRaises(RuntimeError):
             self.trader.get_usd_symbols()
@@ -616,7 +616,7 @@ class TestValidateUsdPair(unittest.TestCase):
     def test_buy_raises_for_non_usd_pair(self):
         trader = _make_trader()
         with self.assertRaises(ValueError):
-            trader.buy("BTC/USDT", 40.0)
+            trader.buy("BTC/EUR", 40.0)
         trader.exchange.create_market_buy_order.assert_not_called()
 
     def test_sell_raises_for_non_usd_pair(self):
