@@ -18,6 +18,8 @@ Trade signals
 
 Set PAPER_TRADING = True in config.py (the default) to simulate orders
 without spending real money.
+
+All trading pairs are USD-quoted (e.g. ``"BTC/USD"``).
 """
 
 import logging
@@ -110,26 +112,26 @@ class CryptoTrader:
             )
 
     @staticmethod
-    def _validate_usdt_pair(symbol: str) -> None:
+    def _validate_usd_pair(symbol: str) -> None:
         """
-        Raise :class:`ValueError` if *symbol* is not a USDT-quoted pair.
+        Raise :class:`ValueError` if *symbol* is not a USD-quoted pair.
 
-        All buys are funded from USDT and all sells return proceeds to USDT,
-        so only pairs of the form ``"BASE/USDT"`` are accepted.
+        All buys are funded from USD and all sells return proceeds to USD,
+        so only pairs of the form ``"BASE/USD"`` are accepted.
 
         Parameters
         ----------
         symbol :
-            Trading pair, e.g. ``"BTC/USDT"``.
+            Trading pair, e.g. ``"BTC/USD"``.
 
         Raises
         ------
         ValueError
-            If *symbol* does not end with ``"/USDT"``.
+            If *symbol* does not end with ``"/USD"``.
         """
-        if not symbol.upper().endswith("/USDT"):
+        if not symbol.upper().endswith("/USD"):
             raise ValueError(
-                f"Only USDT-quoted pairs are supported (e.g. 'BTC/USDT'), "
+                f"Only USD-quoted pairs are supported (e.g. 'BTC/USD'), "
                 f"got '{symbol}'."
             )
 
@@ -148,35 +150,35 @@ class CryptoTrader:
     # Public API
     # ------------------------------------------------------------------
 
-    def get_usdt_symbols(self) -> list:
+    def get_usd_symbols(self) -> list:
         """
-        Return all active USDT-quoted trading pairs available on the exchange.
+        Return all active USD-quoted trading pairs available on the exchange.
 
         Calls ``exchange.load_markets()`` to fetch the full market list, then
-        filters to pairs whose quote currency is ``USDT`` and which are marked
+        filters to pairs whose quote currency is ``USD`` and which are marked
         active by the exchange.
 
         Returns
         -------
         list[str]
-            Sorted list of symbols, e.g. ``["BTC/USDT", "ETH/USDT", ...]``.
+            Sorted list of symbols, e.g. ``["BTC/USD", "ETH/USD", ...]``.
 
         Raises
         ------
         RuntimeError
-            If no active USDT pairs are found.
+            If no active USD pairs are found.
         """
         markets = self.exchange.load_markets()
         symbols = sorted(
             symbol
             for symbol, market in markets.items()
-            if market.get("quote") == "USDT" and market.get("active", True)
+            if market.get("quote") == "USD" and market.get("active", True)
         )
         if not symbols:
             raise RuntimeError(
-                "No active USDT-quoted markets found on the exchange."
+                "No active USD-quoted markets found on the exchange."
             )
-        logger.info("get_usdt_symbols — found %d active USDT pairs", len(symbols))
+        logger.info("get_usd_symbols — found %d active USD pairs", len(symbols))
         return symbols
 
     def buy(self, symbol: str, amount_usd: float) -> dict:
@@ -186,7 +188,7 @@ class CryptoTrader:
         Parameters
         ----------
         symbol :
-            Trading pair, e.g. ``"BTC/USDT"``.
+            Trading pair, e.g. ``"BTC/USD"``.
         amount_usd :
             Order value in USD.  Must be between ``min_buy_order`` ($30)
             and ``max_buy_order`` ($50) inclusive.
@@ -202,9 +204,9 @@ class CryptoTrader:
         OrderSizeError
             If *amount_usd* is outside the configured range.
         ValueError
-            If *symbol* is not a USDT-quoted pair.
+            If *symbol* is not a USD-quoted pair.
         """
-        self._validate_usdt_pair(symbol)
+        self._validate_usd_pair(symbol)
         self._validate_buy_amount(amount_usd)
 
         price = self._get_price(symbol)
@@ -240,7 +242,7 @@ class CryptoTrader:
         Parameters
         ----------
         symbol :
-            Trading pair, e.g. ``"BTC/USDT"``.
+            Trading pair, e.g. ``"BTC/USD"``.
         quantity :
             Number of units to sell.
 
@@ -253,7 +255,7 @@ class CryptoTrader:
         if quantity <= 0:
             raise ValueError(f"Sell quantity must be positive, got {quantity}.")
 
-        self._validate_usdt_pair(symbol)
+        self._validate_usd_pair(symbol)
 
         price = self._get_price(symbol)
 
@@ -279,59 +281,59 @@ class CryptoTrader:
 
         return self.exchange.create_market_sell_order(symbol, quantity)
 
-    def get_usdt_balance(self) -> float:
+    def get_usd_balance(self) -> float:
         """
-        Return the free USDT balance available on the exchange.
+        Return the free USD balance available on the exchange.
 
         Returns
         -------
         float
-            Amount of free USDT available to spend on new buy orders.
+            Amount of free USD available to spend on new buy orders.
 
         Raises
         ------
         RuntimeError
-            If the exchange does not return a USDT balance entry.
+            If the exchange does not return a USD balance entry.
         """
         balance = self.exchange.fetch_balance()
-        usdt = balance.get("USDT", {})
-        free = usdt.get("free")
+        usd = balance.get("USD", {})
+        free = usd.get("free")
         if free is None:
             raise RuntimeError(
-                "Unable to retrieve USDT balance from exchange. "
-                "The 'USDT.free' field is missing."
+                "Unable to retrieve USD balance from exchange. "
+                "The 'USD.free' field is missing."
             )
         return float(free)
 
     def buy_max_orders(self, symbol: str) -> list:
         """
-        Place as many buy orders for *symbol* as the current USDT balance
+        Place as many buy orders for *symbol* as the current USD balance
         allows.
 
         Each order is sized at ``max_buy_order`` USD.  Orders are placed
         until the remaining balance falls below ``min_buy_order``.  All
-        proceeds from sells flow back to USDT, so the balance is the single
+        proceeds from sells flow back to USD, so the balance is the single
         source of funds for new buys.
 
         Parameters
         ----------
         symbol :
-            USDT-quoted trading pair, e.g. ``"BTC/USDT"``.
+            USD-quoted trading pair, e.g. ``"BTC/USD"``.
 
         Returns
         -------
         list[dict]
             A list of order dicts — one entry per order placed.  Returns an
-            empty list when the USDT balance is below ``min_buy_order``.
+            empty list when the USD balance is below ``min_buy_order``.
 
         Raises
         ------
         ValueError
-            If *symbol* is not a USDT-quoted pair.
+            If *symbol* is not a USD-quoted pair.
         """
-        self._validate_usdt_pair(symbol)
+        self._validate_usd_pair(symbol)
 
-        balance = self.get_usdt_balance()
+        balance = self.get_usd_balance()
         orders = []
 
         logger.info(
@@ -452,7 +454,7 @@ class CryptoTrader:
         Parameters
         ----------
         symbol :
-            Trading pair, e.g. ``"BTC/USDT"``.
+            Trading pair, e.g. ``"BTC/USD"``.
         timeframe :
             Candle interval accepted by the exchange (default ``"1h"``).
 
@@ -505,7 +507,7 @@ class CryptoTrader:
         Parameters
         ----------
         symbol :
-            Trading pair, e.g. ``"BTC/USDT"``.
+            Trading pair, e.g. ``"BTC/USD"``.
         timeframe :
             Candle interval accepted by the exchange (default ``"1h"``).
         """
@@ -540,7 +542,7 @@ class CryptoTrader:
         Parameters
         ----------
         symbol :
-            Trading pair, e.g. ``"BTC/USDT"``.
+            Trading pair, e.g. ``"BTC/USD"``.
         entry_price :
             The price at which the position was opened.
 

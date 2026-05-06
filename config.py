@@ -12,7 +12,7 @@ MAX_BUY_ORDER = 78.0   # Maximum buy order amount in USD
 DEFAULT_EXCHANGE = "kraken"
 
 # Default crypto trading pairs to monitor
-DEFAULT_SYMBOLS = ["BTC/USDT", "ETH/USDT"]
+DEFAULT_SYMBOLS = ["BTC/USD", "ETH/USD"]
 
 # Paper trading mode — when True, no real orders are placed
 PAPER_TRADING = False

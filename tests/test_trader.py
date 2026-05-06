@@ -106,59 +106,59 @@ class TestExchangeIdNormalization(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# get_usdt_symbols tests
+# get_usd_symbols tests
 # ---------------------------------------------------------------------------
 
-class TestGetUsdtSymbols(unittest.TestCase):
+class TestGetUsdSymbols(unittest.TestCase):
     def setUp(self):
         self.trader = _make_trader()
 
     def _set_markets(self, markets: dict) -> None:
         self.trader.exchange.load_markets.return_value = markets
 
-    def test_returns_only_usdt_pairs(self):
+    def test_returns_only_usd_pairs(self):
         self._set_markets({
-            "BTC/USDT": {"quote": "USDT", "active": True},
-            "ETH/USDT": {"quote": "USDT", "active": True},
+            "BTC/USD": {"quote": "USD", "active": True},
+            "ETH/USD": {"quote": "USD", "active": True},
             "BTC/BTC": {"quote": "BTC", "active": True},
         })
-        symbols = self.trader.get_usdt_symbols()
-        self.assertIn("BTC/USDT", symbols)
-        self.assertIn("ETH/USDT", symbols)
+        symbols = self.trader.get_usd_symbols()
+        self.assertIn("BTC/USD", symbols)
+        self.assertIn("ETH/USD", symbols)
         self.assertNotIn("BTC/BTC", symbols)
 
     def test_excludes_inactive_pairs(self):
         self._set_markets({
-            "BTC/USDT": {"quote": "USDT", "active": True},
-            "XRP/USDT": {"quote": "USDT", "active": False},
+            "BTC/USD": {"quote": "USD", "active": True},
+            "XRP/USD": {"quote": "USD", "active": False},
         })
-        symbols = self.trader.get_usdt_symbols()
-        self.assertIn("BTC/USDT", symbols)
-        self.assertNotIn("XRP/USDT", symbols)
+        symbols = self.trader.get_usd_symbols()
+        self.assertIn("BTC/USD", symbols)
+        self.assertNotIn("XRP/USD", symbols)
 
     def test_returns_sorted_list(self):
         self._set_markets({
-            "SOL/USDT": {"quote": "USDT", "active": True},
-            "ADA/USDT": {"quote": "USDT", "active": True},
-            "BTC/USDT": {"quote": "USDT", "active": True},
-        })
-        symbols = self.trader.get_usdt_symbols()
-        self.assertEqual(symbols, sorted(symbols))
-
-    def test_raises_when_no_usdt_pairs_found(self):
-        self._set_markets({
+            "SOL/USD": {"quote": "USD", "active": True},
+            "ADA/USD": {"quote": "USD", "active": True},
             "BTC/USD": {"quote": "USD", "active": True},
         })
+        symbols = self.trader.get_usd_symbols()
+        self.assertEqual(symbols, sorted(symbols))
+
+    def test_raises_when_no_usd_pairs_found(self):
+        self._set_markets({
+            "BTC/EUR": {"quote": "EUR", "active": True},
+        })
         with self.assertRaises(RuntimeError):
-            self.trader.get_usdt_symbols()
+            self.trader.get_usd_symbols()
 
     def test_active_defaults_to_true_when_key_missing(self):
         # Markets without an 'active' key should be included.
         self._set_markets({
-            "DOT/USDT": {"quote": "USDT"},
+            "DOT/USD": {"quote": "USD"},
         })
-        symbols = self.trader.get_usdt_symbols()
-        self.assertIn("DOT/USDT", symbols)
+        symbols = self.trader.get_usd_symbols()
+        self.assertIn("DOT/USD", symbols)
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +222,7 @@ class TestOrderLimitValidation(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestPaperBuy(unittest.TestCase):
-    SYMBOL = "BTC/USDT"
+    SYMBOL = "BTC/USD"
     PRICE = 50_000.0
 
     def setUp(self):
@@ -271,7 +271,7 @@ class TestPaperBuy(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestPaperSell(unittest.TestCase):
-    SYMBOL = "ETH/USDT"
+    SYMBOL = "ETH/USD"
     PRICE = 3_000.0
 
     def setUp(self):
@@ -312,16 +312,16 @@ class TestGetPrice(unittest.TestCase):
     def test_raises_when_ask_and_last_are_none(self):
         self.trader.exchange.fetch_ticker.return_value = {"ask": None, "last": None}
         with self.assertRaises(RuntimeError):
-            self.trader._get_price("BTC/USDT")
+            self.trader._get_price("BTC/USD")
 
     def test_raises_when_ask_and_last_are_zero(self):
         self.trader.exchange.fetch_ticker.return_value = {"ask": 0, "last": 0}
         with self.assertRaises(RuntimeError):
-            self.trader._get_price("BTC/USDT")
+            self.trader._get_price("BTC/USD")
 
     def test_uses_last_when_ask_is_none(self):
         self.trader.exchange.fetch_ticker.return_value = {"ask": None, "last": 2000.0}
-        price = self.trader._get_price("ETH/USDT")
+        price = self.trader._get_price("ETH/USD")
         self.assertEqual(price, 2000.0)
 
 
@@ -416,7 +416,7 @@ class TestComputeRSI(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestGetIndicators(unittest.TestCase):
-    SYMBOL = "BTC/USDT"
+    SYMBOL = "BTC/USD"
 
     def setUp(self):
         self.trader = _make_trader()
@@ -454,7 +454,7 @@ class TestGetIndicators(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestShouldBuy(unittest.TestCase):
-    SYMBOL = "BTC/USDT"
+    SYMBOL = "BTC/USD"
 
     def _set_indicators(self, trader, price, ema20, ema50, prev_ema20, prev_ema50, rsi):
         """Patch get_indicators to return controlled EMA crossover and RSI values."""
@@ -532,7 +532,7 @@ class TestShouldBuy(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestCheckExit(unittest.TestCase):
-    SYMBOL = "BTC/USDT"
+    SYMBOL = "BTC/USD"
     ENTRY = 10_000.0
 
     def setUp(self):
@@ -583,43 +583,43 @@ class TestCheckExit(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# USDT-pair validation tests
+# USD-pair validation tests
 # ---------------------------------------------------------------------------
 
-class TestValidateUsdtPair(unittest.TestCase):
-    def test_valid_usdt_pair_passes(self):
-        CryptoTrader._validate_usdt_pair("BTC/USDT")   # should not raise
+class TestValidateUsdPair(unittest.TestCase):
+    def test_valid_usd_pair_passes(self):
+        CryptoTrader._validate_usd_pair("BTC/USD")   # should not raise
 
-    def test_valid_eth_usdt_passes(self):
-        CryptoTrader._validate_usdt_pair("ETH/USDT")   # should not raise
+    def test_valid_eth_usd_passes(self):
+        CryptoTrader._validate_usd_pair("ETH/USD")   # should not raise
 
-    def test_lowercase_usdt_passes(self):
-        CryptoTrader._validate_usdt_pair("btc/usdt")   # case-insensitive
+    def test_lowercase_usd_passes(self):
+        CryptoTrader._validate_usd_pair("btc/usd")   # case-insensitive
 
-    def test_non_usdt_quote_raises(self):
+    def test_non_usd_quote_raises(self):
         with self.assertRaises(ValueError):
-            CryptoTrader._validate_usdt_pair("BTC/BTC")
+            CryptoTrader._validate_usd_pair("BTC/BTC")
 
-    def test_btc_usd_raises(self):
+    def test_btc_usdt_raises(self):
         with self.assertRaises(ValueError):
-            CryptoTrader._validate_usdt_pair("BTC/USD")
+            CryptoTrader._validate_usd_pair("BTC/USDT")
 
     def test_btc_busd_raises(self):
         with self.assertRaises(ValueError):
-            CryptoTrader._validate_usdt_pair("BTC/BUSD")
+            CryptoTrader._validate_usd_pair("BTC/BUSD")
 
     def test_error_message_contains_symbol(self):
         with self.assertRaises(ValueError) as ctx:
-            CryptoTrader._validate_usdt_pair("BTC/EUR")
+            CryptoTrader._validate_usd_pair("BTC/EUR")
         self.assertIn("BTC/EUR", str(ctx.exception))
 
-    def test_buy_raises_for_non_usdt_pair(self):
+    def test_buy_raises_for_non_usd_pair(self):
         trader = _make_trader()
         with self.assertRaises(ValueError):
-            trader.buy("BTC/BTC", 40.0)
+            trader.buy("BTC/EUR", 40.0)
         trader.exchange.create_market_buy_order.assert_not_called()
 
-    def test_sell_raises_for_non_usdt_pair(self):
+    def test_sell_raises_for_non_usd_pair(self):
         trader = _make_trader()
         with self.assertRaises(ValueError):
             trader.sell("BTC/EUR", 0.01)
@@ -627,54 +627,54 @@ class TestValidateUsdtPair(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# get_usdt_balance tests
+# get_usd_balance tests
 # ---------------------------------------------------------------------------
 
-class TestGetUsdtBalance(unittest.TestCase):
+class TestGetUsdBalance(unittest.TestCase):
     def setUp(self):
         self.trader = _make_trader()
 
     def _set_balance(self, free: float):
         self.trader.exchange.fetch_balance.return_value = {
-            "USDT": {"free": free, "used": 0.0, "total": free}
+            "USD": {"free": free, "used": 0.0, "total": free}
         }
 
-    def test_returns_free_usdt_balance(self):
+    def test_returns_free_usd_balance(self):
         self._set_balance(250.0)
-        self.assertAlmostEqual(self.trader.get_usdt_balance(), 250.0)
+        self.assertAlmostEqual(self.trader.get_usd_balance(), 250.0)
 
     def test_returns_zero_balance(self):
         self._set_balance(0.0)
-        self.assertAlmostEqual(self.trader.get_usdt_balance(), 0.0)
+        self.assertAlmostEqual(self.trader.get_usd_balance(), 0.0)
 
-    def test_raises_when_usdt_key_missing(self):
+    def test_raises_when_usd_key_missing(self):
         self.trader.exchange.fetch_balance.return_value = {}
         with self.assertRaises(RuntimeError):
-            self.trader.get_usdt_balance()
+            self.trader.get_usd_balance()
 
     def test_raises_when_free_key_missing(self):
-        self.trader.exchange.fetch_balance.return_value = {"USDT": {"total": 100.0}}
+        self.trader.exchange.fetch_balance.return_value = {"USD": {"total": 100.0}}
         with self.assertRaises(RuntimeError):
-            self.trader.get_usdt_balance()
+            self.trader.get_usd_balance()
 
 
 # ---------------------------------------------------------------------------
 # buy_max_orders tests
 # ---------------------------------------------------------------------------
 
-def _set_ticker_and_balance(trader: CryptoTrader, price: float, usdt_free: float) -> None:
-    """Configure mocked exchange with a price ticker and a USDT balance."""
+def _set_ticker_and_balance(trader: CryptoTrader, price: float, usd_free: float) -> None:
+    """Configure mocked exchange with a price ticker and a USD balance."""
     trader.exchange.fetch_ticker.return_value = {
         "ask": price,
         "last": price,
     }
     trader.exchange.fetch_balance.return_value = {
-        "USDT": {"free": usdt_free, "used": 0.0, "total": usdt_free}
+        "USD": {"free": usd_free, "used": 0.0, "total": usd_free}
     }
 
 
 class TestBuyMaxOrders(unittest.TestCase):
-    SYMBOL = "BTC/USDT"
+    SYMBOL = "BTC/USD"
     PRICE = 50_000.0
 
     def setUp(self):
@@ -726,7 +726,7 @@ class TestBuyMaxOrders(unittest.TestCase):
         for order in orders:
             self.assertEqual(order["side"], "buy")
 
-    def test_raises_for_non_usdt_symbol(self):
+    def test_raises_for_non_usd_symbol(self):
         _set_ticker_and_balance(self.trader, self.PRICE, 200.0)
         with self.assertRaises(ValueError):
             self.trader.buy_max_orders("BTC/EUR")

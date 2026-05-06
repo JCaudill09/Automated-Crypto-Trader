@@ -41,10 +41,10 @@ def main():
     # Discover all active USDT pairs from the exchange.  Fall back to the
     # static list in config if the market-discovery call fails.
     try:
-        symbols = bot.get_usdt_symbols()
+        symbols = bot.get_usd_symbols()
     except Exception as exc:
         logging.warning(
-            "Could not load USDT pairs from exchange (%s). "
+            "Could not load USD pairs from exchange (%s). "
             "Falling back to DEFAULT_SYMBOLS.",
             exc,
         )
@@ -57,7 +57,7 @@ def main():
         # picked up automatically without restarting the bot.
         if time.monotonic() - last_symbol_refresh >= SYMBOL_REFRESH_INTERVAL:
             try:
-                symbols = bot.get_usdt_symbols()
+                symbols = bot.get_usd_symbols()
                 last_symbol_refresh = time.monotonic()
             except Exception as exc:
                 logging.warning("Symbol refresh failed (%s). Keeping current list.", exc)
