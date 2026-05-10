@@ -1,12 +1,12 @@
 """
 Configuration settings for the Automated Crypto Trader.
 
-The bot trades USDT-quoted pairs (e.g. ``"BTC/USDT"``, ``"ETH/USDT"``).
+The bot trades USD-quoted pairs (e.g. ``"BTC/USD"``, ``"ETH/USD"``).
 """
 
 # Order size limits (in USD)
-MIN_BUY_ORDER = 30.0   # Minimum buy order amount in USD
-MAX_BUY_ORDER = 78.0   # Maximum buy order amount in USD
+MIN_BUY_ORDER = 40.0   # Minimum buy order amount in USD
+MAX_BUY_ORDER = 70.0   # Maximum buy order amount in USD
 
 # Default exchange to use (must be supported by ccxt)
 DEFAULT_EXCHANGE = "kraken"
@@ -26,18 +26,18 @@ TAKE_PROFIT_PCT = 0.065   # Close position when price rises 6.5 % above entry
 STOP_LOSS_PCT   = 0.0175  # Close position when price falls 1.75 % below entry
 
 # Technical indicator settings
-EMA_PERIOD     = 200   # 200-period Exponential Moving Average (utility; not used by buy signal)
+EMA_PERIOD     = 200   # 200-period Exponential Moving Average
 RSI_PERIOD     = 14    # RSI look-back period (Wilder smoothing)
-RSI_OVERSOLD   = 50    # RSI below this level → buy signal (< 50, momentum not yet overbought)
+RSI_OVERSOLD   = 50    # RSI below this level → considered oversold (reference threshold)
 RSI_OVERBOUGHT = 70    # RSI above this level → overbought (potential sell)
 
 # ATR (Average True Range) settings
 ATR_PERIOD              = 14   # Look-back period for ATR computation
 ATR_STOP_LOSS_MULTIPLIER = 1.5  # Stop-loss distance = ATR_STOP_LOSS_MULTIPLIER × ATR
 
-# EMA golden-cross signal — EMA 20 crossing above EMA 50 indicates a bullish trend
-SIMPLE_ALGO_SHORT_PERIOD = 20   # Short-term EMA period (EMA 20)
-SIMPLE_ALGO_LONG_PERIOD  = 50   # Long-term EMA period (EMA 50)
+# EMA golden-cross signal — EMA 50 crossing above EMA 200 (golden cross) indicates a bullish trend
+SIMPLE_ALGO_SHORT_PERIOD = 50    # Short-term EMA period (EMA 50)
+SIMPLE_ALGO_LONG_PERIOD  = 200   # Long-term EMA period (EMA 200)
 
 # Bollinger Bands settings
 BB_PERIOD  = 20   # Look-back period for Bollinger Bands
