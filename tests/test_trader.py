@@ -52,10 +52,10 @@ def _make_ohlcv(closes: list) -> list:
 
 class TestConfig(unittest.TestCase):
     def test_min_buy_order_is_30(self):
-        self.assertEqual(config.MIN_BUY_ORDER, 30.0)
+        self.assertEqual(config.MIN_BUY_ORDER, 40.0)
 
     def test_max_buy_order_is_78(self):
-        self.assertEqual(config.MAX_BUY_ORDER, 78.0)
+        self.assertEqual(config.MAX_BUY_ORDER, 70.0)
 
     def test_min_less_than_max(self):
         self.assertLess(config.MIN_BUY_ORDER, config.MAX_BUY_ORDER)
@@ -173,7 +173,7 @@ class TestOrderLimitValidation(unittest.TestCase):
 
     def test_buy_below_minimum_raises(self):
         with self.assertRaises(OrderSizeError):
-            self.trader._validate_buy_amount(29.99)
+            self.trader._validate_buy_amount(39.99)
 
     def test_buy_zero_raises(self):
         with self.assertRaises(OrderSizeError):
@@ -187,7 +187,7 @@ class TestOrderLimitValidation(unittest.TestCase):
 
     def test_buy_above_maximum_raises(self):
         with self.assertRaises(OrderSizeError):
-            self.trader._validate_buy_amount(78.01)
+            self.trader._validate_buy_amount(70.01)
 
     def test_buy_way_above_maximum_raises(self):
         with self.assertRaises(OrderSizeError):
@@ -196,10 +196,10 @@ class TestOrderLimitValidation(unittest.TestCase):
     # --- valid range ---
 
     def test_buy_at_minimum_is_valid(self):
-        self.trader._validate_buy_amount(30.0)   # should not raise
+        self.trader._validate_buy_amount(40.0)   # should not raise
 
     def test_buy_at_maximum_is_valid(self):
-        self.trader._validate_buy_amount(78.0)   # should not raise
+        self.trader._validate_buy_amount(70.0)   # should not raise
 
     def test_buy_midrange_is_valid(self):
         self.trader._validate_buy_amount(50.0)   # should not raise
@@ -208,13 +208,13 @@ class TestOrderLimitValidation(unittest.TestCase):
         with self.assertRaises(OrderSizeError) as ctx:
             self.trader._validate_buy_amount(10.0)
         self.assertIn("10.00", str(ctx.exception))
-        self.assertIn("30.00", str(ctx.exception))
+        self.assertIn("40.00", str(ctx.exception))
 
     def test_error_message_contains_amounts_when_above(self):
         with self.assertRaises(OrderSizeError) as ctx:
             self.trader._validate_buy_amount(100.0)
         self.assertIn("100.00", str(ctx.exception))
-        self.assertIn("78.00", str(ctx.exception))
+        self.assertIn("70.00", str(ctx.exception))
 
 
 # ---------------------------------------------------------------------------
@@ -244,11 +244,11 @@ class TestPaperBuy(unittest.TestCase):
         self.assertAlmostEqual(order["cost"], 40.0)
 
     def test_buy_minimum_amount(self):
-        order = self.trader.buy(self.SYMBOL, 30.0)
+        order = self.trader.buy(self.SYMBOL, 40.0)
         self.assertEqual(order["side"], "buy")
 
     def test_buy_maximum_amount(self):
-        order = self.trader.buy(self.SYMBOL, 50.0)
+        order = self.trader.buy(self.SYMBOL, 70.0)
         self.assertEqual(order["side"], "buy")
 
     def test_buy_does_not_call_exchange_create_order(self):
@@ -428,11 +428,10 @@ class TestGetIndicators(unittest.TestCase):
     def test_returns_price_ema20_ema50_rsi_keys(self):
         result = self.trader.get_indicators(self.SYMBOL)
         self.assertIn("price", result)
-        self.assertIn("ema20", result)
         self.assertIn("ema50", result)
-        self.assertIn("prev_ema20", result)
+        self.assertIn("ema200", result)
         self.assertIn("prev_ema50", result)
-        self.assertIn("rsi", result)
+        self.assertIn("prev_ema200", result)
 
     def test_price_equals_last_close(self):
         n = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10
@@ -456,74 +455,56 @@ class TestGetIndicators(unittest.TestCase):
 class TestShouldBuy(unittest.TestCase):
     SYMBOL = "BTC/USD"
 
-    def _set_indicators(self, trader, price, ema20, ema50, prev_ema20, prev_ema50, rsi):
-        """Patch get_indicators to return controlled EMA crossover and RSI values."""
+    def _set_indicators(self, trader, price, ema50, ema200, prev_ema50, prev_ema200):
+        """Patch get_indicators to return controlled EMA crossover values."""
         trader.get_indicators = MagicMock(
             return_value={
                 "price": price,
-                "ema20": ema20,
                 "ema50": ema50,
-                "prev_ema20": prev_ema20,
+                "ema200": ema200,
                 "prev_ema50": prev_ema50,
-                "rsi": rsi,
+                "prev_ema200": prev_ema200,
             }
         )
 
-    def test_buy_signal_on_crossover_with_rsi_below_50(self):
-        # prev: ema20 below ema50; current: ema20 above ema50; rsi < 50 → signal
+    def test_buy_signal_on_golden_cross(self):
+        # prev: ema50 below ema200; current: ema50 above ema200 → signal
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
-                             ema20=105.0, ema50=100.0,
-                             prev_ema20=95.0, prev_ema50=100.0, rsi=40.0)
+                             ema50=105.0, ema200=100.0,
+                             prev_ema50=95.0, prev_ema200=100.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
-    def test_buy_signal_when_prev_ema20_exactly_equals_prev_ema50(self):
-        # prev_ema20 == prev_ema50 (touching), current ema20 > ema50; rsi < 50 → signal
+    def test_buy_signal_when_prev_ema50_exactly_equals_prev_ema200(self):
+        # prev_ema50 == prev_ema200 (touching), current ema50 > ema200 → signal
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
-                             ema20=105.0, ema50=100.0,
-                             prev_ema20=100.0, prev_ema50=100.0, rsi=45.0)
+                             ema50=105.0, ema200=100.0,
+                             prev_ema50=100.0, prev_ema200=100.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_crossover_but_rsi_at_50(self):
-        # Crossover fires but RSI is exactly 50 (must be strictly below)
+    def test_no_signal_when_ema50_already_above_ema200(self):
+        # Already crossed (no new cross)
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
-                             ema20=105.0, ema50=100.0,
-                             prev_ema20=95.0, prev_ema50=100.0,
-                             rsi=config.RSI_OVERSOLD)
+                             ema50=108.0, ema200=100.0,
+                             prev_ema50=105.0, prev_ema200=100.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_crossover_but_rsi_above_50(self):
-        # Crossover fires but RSI is above 50 → no signal
-        trader = _make_trader()
-        self._set_indicators(trader, price=110.0,
-                             ema20=105.0, ema50=100.0,
-                             prev_ema20=95.0, prev_ema50=100.0, rsi=60.0)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
-    def test_no_signal_when_ema20_already_above_ema50(self):
-        # Already crossed (no new cross), even with rsi < 50
-        trader = _make_trader()
-        self._set_indicators(trader, price=110.0,
-                             ema20=108.0, ema50=100.0,
-                             prev_ema20=105.0, prev_ema50=100.0, rsi=40.0)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
-
-    def test_no_signal_when_ema20_below_ema50(self):
-        # Downtrend: ema20 below ema50 on both candles
+    def test_no_signal_when_ema50_below_ema200(self):
+        # Downtrend: ema50 below ema200 on both candles
         trader = _make_trader()
         self._set_indicators(trader, price=90.0,
-                             ema20=95.0, ema50=100.0,
-                             prev_ema20=93.0, prev_ema50=100.0, rsi=40.0)
+                             ema50=95.0, ema200=100.0,
+                             prev_ema50=93.0, prev_ema200=100.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
     def test_no_signal_on_death_cross(self):
-        # prev: ema20 above ema50; current: ema20 below ema50 → death cross
+        # prev: ema50 above ema200; current: ema50 below ema200 → death cross
         trader = _make_trader()
         self._set_indicators(trader, price=90.0,
-                             ema20=95.0, ema50=100.0,
-                             prev_ema20=105.0, prev_ema50=100.0, rsi=40.0)
+                             ema50=95.0, ema200=100.0,
+                             prev_ema50=105.0, prev_ema200=100.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
 
 
@@ -692,10 +673,10 @@ class TestBuyMaxOrders(unittest.TestCase):
         self.assertEqual(orders[0]["side"], "buy")
 
     def test_one_order_when_balance_between_min_and_max(self):
-        _set_ticker_and_balance(self.trader, self.PRICE, 35.0)
+        _set_ticker_and_balance(self.trader, self.PRICE, 50.0)
         orders = self.trader.buy_max_orders(self.SYMBOL)
         self.assertEqual(len(orders), 1)
-        self.assertAlmostEqual(orders[0]["cost"], 35.0)
+        self.assertAlmostEqual(orders[0]["cost"], 50.0)
 
     def test_two_orders_when_balance_is_double_max(self):
         _set_ticker_and_balance(self.trader, self.PRICE, config.MAX_BUY_ORDER * 2)
