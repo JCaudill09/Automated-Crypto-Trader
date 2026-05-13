@@ -43,10 +43,6 @@ SIMPLE_ALGO_LONG_PERIOD  = 200   # Long-term EMA period (EMA 200)
 BB_PERIOD  = 20   # Look-back period for Bollinger Bands
 BB_NUM_STD = 1.5  # Number of standard deviations for the upper/lower bands
 
-# Keltner Channel settings
-KC_PERIOD     = 20   # EMA period and ATR period for Keltner Channels
-KC_MULTIPLIER = 2.5  # Upper/lower channel distance = KC_MULTIPLIER × ATR
-
 # Relative Volume (RVOL) settings
 # RVOL = current candle volume / average volume over the preceding RVOL_PERIOD candles.
 # A high RVOL indicates that the current candle is seeing unusually heavy participation.
@@ -72,7 +68,7 @@ SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
 # Maximum allowed bid-ask spread expressed as a fraction of the ask price.
 # A spread above this threshold indicates insufficient liquidity or a
 # market-maker-dominated book, and no buy order or buy signal is issued.
-MAX_BID_ASK_SPREAD_PCT = 0.005  # 0.5 %
+MAX_BID_ASK_SPREAD_PCT = 0.01  # 1.0 %
 
 # ---------------------------------------------------------------------------
 # Order bundles
