@@ -100,7 +100,7 @@ class CryptoTrader:
             options = getattr(self.exchange, "options", None)
             if not isinstance(options, dict):
                 self.exchange.options = {}
-            self.exchange.options["adjustForTimeDifference"] = True
+            self.exchange.options.setdefault("adjustForTimeDifference", True)
             self.exchange.nonce = self._next_nonce
 
         logger.info(

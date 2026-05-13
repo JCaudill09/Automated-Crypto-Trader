@@ -6,6 +6,7 @@ patched with unittest.mock so no API keys are required.
 """
 
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import ccxt
@@ -132,6 +133,13 @@ class TestExchangeIdNormalization(unittest.TestCase):
         nonces = [trader._next_nonce() for _ in range(4)]
         self.assertEqual(nonces, sorted(nonces))
         self.assertEqual(len(set(nonces)), 4)
+
+    def test_kraken_nonce_generation_is_thread_safe(self):
+        trader = _make_trader(paper_trading=False)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            nonces = list(pool.map(lambda _: trader._next_nonce(), range(200)))
+        self.assertEqual(len(nonces), 200)
+        self.assertEqual(len(set(nonces)), 200)
 
 
 # ---------------------------------------------------------------------------
