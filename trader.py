@@ -120,12 +120,12 @@ class CryptoTrader:
         """
         Return a process-local strictly increasing nonce for Kraken requests.
         """
-        candidate = time.time_ns() // 1_000_000
+        nonce_candidate = time.time_ns() // 1_000_000
         with self._nonce_lock:
-            if candidate <= self._last_nonce:
-                candidate = self._last_nonce + 1
-            self._last_nonce = candidate
-            return candidate
+            if nonce_candidate <= self._last_nonce:
+                nonce_candidate = self._last_nonce + 1
+            self._last_nonce = nonce_candidate
+            return nonce_candidate
 
     def _resync_exchange_clock(self) -> bool:
         """
