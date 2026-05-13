@@ -8,6 +8,8 @@ patched with unittest.mock so no API keys are required.
 import unittest
 from unittest.mock import MagicMock, patch
 
+import ccxt
+
 import config
 from trader import CryptoTrader, OrderSizeError
 
@@ -751,6 +753,87 @@ class TestBuyMaxOrders(unittest.TestCase):
         orders = self.trader.buy_max_orders(self.SYMBOL)
         for order in orders:
             self.assertTrue(order.get("paper"))
+
+
+# ---------------------------------------------------------------------------
+# _execute_order retry tests
+# ---------------------------------------------------------------------------
+
+class TestExecuteOrderRetry(unittest.TestCase):
+    """Tests for the InvalidNonce retry logic in CryptoTrader._execute_order."""
+
+    def setUp(self):
+        self.trader = _make_trader(paper_trading=False)
+
+    @patch("trader.time.sleep")
+    def test_succeeds_on_first_attempt_without_retry(self, mock_sleep):
+        """A successful first call should not sleep or retry."""
+        expected = {"id": "order-1"}
+        order_fn = MagicMock(return_value=expected)
+        result = self.trader._execute_order(order_fn, "BTC/USD", 0.001)
+        self.assertEqual(result, expected)
+        order_fn.assert_called_once_with("BTC/USD", 0.001)
+        mock_sleep.assert_not_called()
+
+    @patch("trader.time.sleep")
+    def test_retries_on_invalid_nonce_and_succeeds(self, mock_sleep):
+        """Should retry after an InvalidNonce and return the successful result."""
+        expected = {"id": "order-2"}
+        order_fn = MagicMock(
+            side_effect=[ccxt.InvalidNonce("kraken", "EAPI:Invalid nonce"), expected]
+        )
+        result = self.trader._execute_order(order_fn, "BTC/USD", 0.001)
+        self.assertEqual(result, expected)
+        self.assertEqual(order_fn.call_count, 2)
+        mock_sleep.assert_called_once()
+
+    @patch("trader.time.sleep")
+    def test_raises_after_all_retries_exhausted(self, mock_sleep):
+        """Should raise InvalidNonce once all retry attempts are used up."""
+        import trader as trader_module
+        nonce_exc = ccxt.InvalidNonce("kraken", "EAPI:Invalid nonce")
+        order_fn = MagicMock(side_effect=nonce_exc)
+        with self.assertRaises(ccxt.InvalidNonce):
+            self.trader._execute_order(order_fn, "BTC/USD", 0.001)
+        self.assertEqual(order_fn.call_count, trader_module._NONCE_RETRY_ATTEMPTS)
+        self.assertEqual(mock_sleep.call_count, trader_module._NONCE_RETRY_ATTEMPTS)
+
+    @patch("trader.time.sleep")
+    def test_non_nonce_exception_is_not_retried(self, mock_sleep):
+        """Other exchange errors must propagate immediately without retry."""
+        order_fn = MagicMock(
+            side_effect=ccxt.NetworkError("kraken", "connection reset")
+        )
+        with self.assertRaises(ccxt.NetworkError):
+            self.trader._execute_order(order_fn, "BTC/USD", 0.001)
+        order_fn.assert_called_once()
+        mock_sleep.assert_not_called()
+
+    @patch("trader.time.sleep")
+    def test_buy_live_retries_on_invalid_nonce(self, mock_sleep):
+        """CryptoTrader.buy must retry create_market_buy_order on InvalidNonce."""
+        _set_price(self.trader, "BTC/USD", 50_000.0)
+        expected = {"id": "buy-order", "price": 50_000.0, "amount": 0.001}
+        self.trader.exchange.create_market_buy_order.side_effect = [
+            ccxt.InvalidNonce("kraken", "EAPI:Invalid nonce"),
+            expected,
+        ]
+        result = self.trader.buy("BTC/USD", 50.0)
+        self.assertEqual(result, expected)
+        self.assertEqual(self.trader.exchange.create_market_buy_order.call_count, 2)
+
+    @patch("trader.time.sleep")
+    def test_sell_live_retries_on_invalid_nonce(self, mock_sleep):
+        """CryptoTrader.sell must retry create_market_sell_order on InvalidNonce."""
+        _set_price(self.trader, "ETH/USD", 3_000.0)
+        expected = {"id": "sell-order", "price": 3_000.0, "amount": 0.01}
+        self.trader.exchange.create_market_sell_order.side_effect = [
+            ccxt.InvalidNonce("kraken", "EAPI:Invalid nonce"),
+            expected,
+        ]
+        result = self.trader.sell("ETH/USD", 0.01)
+        self.assertEqual(result, expected)
+        self.assertEqual(self.trader.exchange.create_market_sell_order.call_count, 2)
 
 
 if __name__ == "__main__":
