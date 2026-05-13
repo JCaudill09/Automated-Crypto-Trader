@@ -820,6 +820,18 @@ class TestExecuteOrderRetry(unittest.TestCase):
         mock_sleep.assert_called_once_with(1.0)
 
     @patch("trader.time.sleep")
+    def test_retries_on_exchange_error_when_message_contains_invalid_nonce(self, mock_sleep):
+        """Should retry when nonce errors are wrapped as generic exchange errors."""
+        expected = {"id": "order-2b"}
+        order_fn = MagicMock(
+            side_effect=[ccxt.ExchangeError("kraken", "EAPI:Invalid nonce"), expected]
+        )
+        result = self.trader._execute_order(order_fn, "BTC/USD", 0.001)
+        self.assertEqual(result, expected)
+        self.assertEqual(order_fn.call_count, 2)
+        mock_sleep.assert_called_once_with(1.0)
+
+    @patch("trader.time.sleep")
     def test_raises_after_all_retries_exhausted(self, mock_sleep):
         """Should raise InvalidNonce once all retry attempts are used up."""
         import trader as trader_module
@@ -841,6 +853,17 @@ class TestExecuteOrderRetry(unittest.TestCase):
             side_effect=ccxt.NetworkError("kraken", "connection reset")
         )
         with self.assertRaises(ccxt.NetworkError):
+            self.trader._execute_order(order_fn, "BTC/USD", 0.001)
+        order_fn.assert_called_once()
+        mock_sleep.assert_not_called()
+
+    @patch("trader.time.sleep")
+    def test_exchange_error_without_nonce_message_is_not_retried(self, mock_sleep):
+        """Generic exchange errors without nonce text should not retry."""
+        order_fn = MagicMock(
+            side_effect=ccxt.ExchangeError("kraken", "EAPI:Rate limit exceeded")
+        )
+        with self.assertRaises(ccxt.ExchangeError):
             self.trader._execute_order(order_fn, "BTC/USD", 0.001)
         order_fn.assert_called_once()
         mock_sleep.assert_not_called()
