@@ -100,6 +100,11 @@ class CryptoTrader:
         )
         if exchange_id == "kraken":
             if not hasattr(self.exchange, "options") or not isinstance(self.exchange.options, dict):
+                if hasattr(self.exchange, "options") and self.exchange.options is not None:
+                    logger.warning(
+                        "Exchange options are not a dict (%s); resetting to empty dict.",
+                        type(self.exchange.options).__name__,
+                    )
                 self.exchange.options = {}
             self.exchange.options.setdefault("adjustForTimeDifference", True)
             self.exchange.nonce = self._next_nonce
@@ -121,6 +126,9 @@ class CryptoTrader:
         """
         Return a process-local strictly increasing nonce for Kraken requests.
         """
+        # Kraken requires monotonically increasing integers.  We use wall-clock
+        # nanoseconds converted to milliseconds for high entropy and then clamp
+        # to ``last + 1`` when calls are too close together or the clock shifts.
         nonce_candidate = time.time_ns() // _NANOS_PER_MILLISECOND
         with self._nonce_lock:
             if nonce_candidate <= self._last_nonce:
