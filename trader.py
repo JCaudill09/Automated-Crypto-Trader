@@ -149,6 +149,16 @@ class CryptoTrader:
                 logger.debug("Failed to refresh exchange time offset: %s", exc)
         return False
 
+    @staticmethod
+    def _is_invalid_nonce_error(exc: ccxt.BaseError) -> bool:
+        """
+        Return ``True`` when *exc* represents an invalid-nonce exchange error.
+        """
+        if isinstance(exc, ccxt.InvalidNonce):
+            return True
+        message = str(exc).lower()
+        return "invalid nonce" in message or "invalid-nonce" in message
+
     def _validate_buy_amount(self, amount_usd: float) -> None:
         """
         Raise :class:`OrderSizeError` if *amount_usd* is outside the
@@ -230,11 +240,13 @@ class CryptoTrader:
         ccxt.InvalidNonce
             If all retry attempts are exhausted.
         """
-        last_exc: ccxt.InvalidNonce | None = None
+        last_exc: ccxt.BaseError | None = None
         for attempt in range(1, _NONCE_RETRY_ATTEMPTS + 1):
             try:
                 return order_fn(*args, **kwargs)
-            except ccxt.InvalidNonce as exc:
+            except ccxt.BaseError as exc:
+                if not self._is_invalid_nonce_error(exc):
+                    raise
                 last_exc = exc
                 resynced = self._resync_exchange_clock()
                 retry_delay = _NONCE_RETRY_DELAY * attempt
