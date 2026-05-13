@@ -26,11 +26,19 @@ All trading pairs are USD-quoted (e.g. ``"BTC/USD"``).
 """
 
 import logging
+import time
 from typing import Optional
 
 import ccxt
 
 import config
+
+# Number of times to retry an order when Kraken rejects it with an invalid-nonce
+# error before giving up and propagating the exception.
+_NONCE_RETRY_ATTEMPTS = 3
+# Seconds to wait between nonce-retry attempts to allow the exchange clock to
+# advance past the previously accepted nonce.
+_NONCE_RETRY_DELAY = 1.0
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +90,7 @@ class CryptoTrader:
             {
                 "apiKey": api_key,
                 "secret": api_secret,
+                "enableRateLimit": True,
             }
         )
 
@@ -148,6 +157,53 @@ class CryptoTrader:
                 "Both 'ask' and 'last' fields are missing or zero."
             )
         return float(price)
+
+    def _execute_order(self, order_fn, *args, **kwargs) -> dict:
+        """
+        Call *order_fn* with *args* / *kwargs* and retry up to
+        ``_NONCE_RETRY_ATTEMPTS`` times when the exchange rejects the request
+        with an invalid-nonce error (``EAPI:Invalid nonce``).
+
+        Kraken requires every authenticated request to carry a strictly-
+        increasing nonce.  Rapid sequential requests or momentary network
+        jitter can cause nonces to arrive out of order, triggering this
+        otherwise-transient error.  A short delay between retries lets the
+        exchange clock advance so the next attempt uses a safely higher nonce.
+
+        Parameters
+        ----------
+        order_fn :
+            A callable that places an order (e.g.
+            ``self.exchange.create_market_buy_order``).
+        *args, **kwargs :
+            Positional and keyword arguments forwarded to *order_fn*.
+
+        Returns
+        -------
+        dict
+            The order dict returned by the exchange on success.
+
+        Raises
+        ------
+        ccxt.InvalidNonce
+            If all retry attempts are exhausted.
+        """
+        last_exc: ccxt.InvalidNonce | None = None
+        for attempt in range(1, _NONCE_RETRY_ATTEMPTS + 1):
+            try:
+                return order_fn(*args, **kwargs)
+            except ccxt.InvalidNonce as exc:
+                last_exc = exc
+                logger.warning(
+                    "Invalid nonce on attempt %d/%d — retrying in %.1fs (%s)",
+                    attempt,
+                    _NONCE_RETRY_ATTEMPTS,
+                    _NONCE_RETRY_DELAY,
+                    exc,
+                )
+                if attempt < _NONCE_RETRY_ATTEMPTS:
+                    time.sleep(_NONCE_RETRY_DELAY)
+        raise last_exc  # type: ignore[misc]
 
     # ------------------------------------------------------------------
     # Public API
@@ -236,7 +292,7 @@ class CryptoTrader:
                 "paper": True,
             }
 
-        return self.exchange.create_market_buy_order(symbol, quantity)
+        return self._execute_order(self.exchange.create_market_buy_order, symbol, quantity)
 
     def sell(self, symbol: str, quantity: float) -> dict:
         """
@@ -282,7 +338,7 @@ class CryptoTrader:
                 "paper": True,
             }
 
-        return self.exchange.create_market_sell_order(symbol, quantity)
+        return self._execute_order(self.exchange.create_market_sell_order, symbol, quantity)
 
     def get_usd_balance(self) -> float:
         """
