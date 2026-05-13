@@ -479,10 +479,12 @@ class CryptoTrader:
         current_price = closes[-1]
 
         logger.debug(
-            "Indicators %s — price=%.4f EMA_short=%.4f EMA_long=%.4f RSI=%.2f",
+            "Indicators %s — price=%.4f EMA%d=%.4f EMA%d=%.4f RSI=%.2f",
             symbol,
             current_price,
+            config.SIMPLE_ALGO_SHORT_PERIOD,
             ema50,
+            config.SIMPLE_ALGO_LONG_PERIOD,
             ema200,
             rsi,
         )

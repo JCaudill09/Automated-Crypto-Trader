@@ -477,7 +477,8 @@ class TestShouldBuy(unittest.TestCase):
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
                              ema50=105.0, ema200=100.0,
-                             prev_ema50=95.0, prev_ema200=100.0)
+                             prev_ema50=95.0, prev_ema200=100.0,
+                             rsi=50.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
     def test_buy_signal_when_prev_ema50_exactly_equals_prev_ema200(self):
@@ -485,7 +486,8 @@ class TestShouldBuy(unittest.TestCase):
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
                              ema50=105.0, ema200=100.0,
-                             prev_ema50=100.0, prev_ema200=100.0)
+                             prev_ema50=100.0, prev_ema200=100.0,
+                             rsi=50.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
     def test_signal_fires_when_in_established_uptrend(self):
