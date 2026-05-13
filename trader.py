@@ -26,6 +26,7 @@ All trading pairs are USD-quoted (e.g. ``"BTC/USD"``).
 """
 
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -83,6 +84,8 @@ class CryptoTrader:
         self.paper_trading = paper_trading
         self.min_buy_order = min_buy_order
         self.max_buy_order = max_buy_order
+        self._last_nonce = 0
+        self._nonce_lock = threading.Lock()
 
         exchange_id = exchange_id.lower()
         exchange_class = getattr(ccxt, exchange_id)
@@ -93,6 +96,12 @@ class CryptoTrader:
                 "enableRateLimit": True,
             }
         )
+        if exchange_id == "kraken":
+            options = getattr(self.exchange, "options", None)
+            if not isinstance(options, dict):
+                self.exchange.options = {}
+            self.exchange.options["adjustForTimeDifference"] = True
+            self.exchange.nonce = self._next_nonce
 
         logger.info(
             "CryptoTrader initialised — exchange=%s paper_trading=%s "
@@ -106,6 +115,30 @@ class CryptoTrader:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _next_nonce(self) -> int:
+        """
+        Return a process-local strictly increasing nonce for Kraken requests.
+        """
+        candidate = time.time_ns() // 1_000_000
+        with self._nonce_lock:
+            if candidate <= self._last_nonce:
+                candidate = self._last_nonce + 1
+            self._last_nonce = candidate
+            return candidate
+
+    def _resync_exchange_clock(self) -> bool:
+        """
+        Ask the exchange to refresh server time offset when supported.
+        """
+        load_time_difference = getattr(self.exchange, "load_time_difference", None)
+        if callable(load_time_difference):
+            try:
+                load_time_difference()
+                return True
+            except Exception as exc:
+                logger.debug("Failed to refresh exchange time offset: %s", exc)
+        return False
 
     def _validate_buy_amount(self, amount_usd: float) -> None:
         """
@@ -194,15 +227,18 @@ class CryptoTrader:
                 return order_fn(*args, **kwargs)
             except ccxt.InvalidNonce as exc:
                 last_exc = exc
+                resynced = self._resync_exchange_clock()
+                retry_delay = _NONCE_RETRY_DELAY * attempt
                 logger.warning(
-                    "Invalid nonce on attempt %d/%d — retrying in %.1fs (%s)",
+                    "Invalid nonce on attempt %d/%d — retrying in %.1fs (resynced=%s, %s)",
                     attempt,
                     _NONCE_RETRY_ATTEMPTS,
-                    _NONCE_RETRY_DELAY,
+                    retry_delay,
+                    resynced,
                     exc,
                 )
                 if attempt < _NONCE_RETRY_ATTEMPTS:
-                    time.sleep(_NONCE_RETRY_DELAY)
+                    time.sleep(retry_delay)
         raise last_exc  # type: ignore[misc]
 
     # ------------------------------------------------------------------
