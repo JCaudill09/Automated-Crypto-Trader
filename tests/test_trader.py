@@ -6,6 +6,7 @@ patched with unittest.mock so no API keys are required.
 """
 
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import ccxt
@@ -108,6 +109,37 @@ class TestExchangeIdNormalization(unittest.TestCase):
 
     def test_mixed_case_kraken_normalised(self):
         self._make_trader_with_id("Kraken")     # reproduces the reported crash
+
+    def test_kraken_enables_time_difference_adjustment_and_custom_nonce(self):
+        with patch("ccxt.kraken") as mock_cls:
+            mock_exchange = MagicMock()
+            mock_exchange.options = {}
+            mock_cls.return_value = mock_exchange
+
+            trader = CryptoTrader(exchange_id="kraken", paper_trading=True)
+
+        self.assertTrue(mock_exchange.options["adjustForTimeDifference"])
+        self.assertTrue(callable(trader.exchange.nonce))
+
+    @patch("trader.time.time_ns")
+    def test_kraken_nonce_is_strictly_increasing(self, mock_time_ns):
+        mock_time_ns.side_effect = [
+            1_000_000_000,
+            1_000_000_000,
+            999_000_000,
+            2_000_000_000,
+        ]
+        trader = _make_trader(paper_trading=False)
+        nonces = [trader._next_nonce() for _ in range(4)]
+        self.assertEqual(nonces, sorted(nonces))
+        self.assertEqual(len(set(nonces)), 4)
+
+    def test_kraken_nonce_generation_is_thread_safe(self):
+        trader = _make_trader(paper_trading=False)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            nonces = list(pool.map(lambda _: trader._next_nonce(), range(200)))
+        self.assertEqual(len(nonces), 200)
+        self.assertEqual(len(set(nonces)), 200)
 
 
 # ---------------------------------------------------------------------------
@@ -785,7 +817,7 @@ class TestExecuteOrderRetry(unittest.TestCase):
         result = self.trader._execute_order(order_fn, "BTC/USD", 0.001)
         self.assertEqual(result, expected)
         self.assertEqual(order_fn.call_count, 2)
-        mock_sleep.assert_called_once()
+        mock_sleep.assert_called_once_with(1.0)
 
     @patch("trader.time.sleep")
     def test_raises_after_all_retries_exhausted(self, mock_sleep):
@@ -797,6 +829,10 @@ class TestExecuteOrderRetry(unittest.TestCase):
             self.trader._execute_order(order_fn, "BTC/USD", 0.001)
         self.assertEqual(order_fn.call_count, trader_module._NONCE_RETRY_ATTEMPTS)
         self.assertEqual(mock_sleep.call_count, trader_module._NONCE_RETRY_ATTEMPTS - 1)
+        mock_sleep.assert_has_calls([
+            unittest.mock.call(trader_module._NONCE_RETRY_DELAY),
+            unittest.mock.call(trader_module._NONCE_RETRY_DELAY * 2),
+        ])
 
     @patch("trader.time.sleep")
     def test_non_nonce_exception_is_not_retried(self, mock_sleep):
@@ -835,7 +871,17 @@ class TestExecuteOrderRetry(unittest.TestCase):
         self.assertEqual(result, expected)
         self.assertEqual(self.trader.exchange.create_market_sell_order.call_count, 2)
 
+    @patch("trader.time.sleep")
+    def test_invalid_nonce_retry_resyncs_exchange_clock(self, mock_sleep):
+        expected = {"id": "order-3"}
+        self.trader.exchange.load_time_difference = MagicMock()
+        order_fn = MagicMock(
+            side_effect=[ccxt.InvalidNonce("kraken", "EAPI:Invalid nonce"), expected]
+        )
+        result = self.trader._execute_order(order_fn, "BTC/USD", 0.001)
+        self.assertEqual(result, expected)
+        self.trader.exchange.load_time_difference.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
-

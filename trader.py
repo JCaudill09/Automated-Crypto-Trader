@@ -26,6 +26,7 @@ All trading pairs are USD-quoted (e.g. ``"BTC/USD"``).
 """
 
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -39,6 +40,8 @@ _NONCE_RETRY_ATTEMPTS = 3
 # Seconds to wait between nonce-retry attempts to allow the exchange clock to
 # advance past the previously accepted nonce.
 _NONCE_RETRY_DELAY = 1.0
+# Conversion factor from nanoseconds to milliseconds.
+_NANOS_PER_MILLISECOND = 1_000_000
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +86,8 @@ class CryptoTrader:
         self.paper_trading = paper_trading
         self.min_buy_order = min_buy_order
         self.max_buy_order = max_buy_order
+        self._last_nonce = 0
+        self._nonce_lock = threading.Lock()
 
         exchange_id = exchange_id.lower()
         exchange_class = getattr(ccxt, exchange_id)
@@ -93,6 +98,16 @@ class CryptoTrader:
                 "enableRateLimit": True,
             }
         )
+        if exchange_id == "kraken":
+            if not hasattr(self.exchange, "options") or not isinstance(self.exchange.options, dict):
+                if hasattr(self.exchange, "options") and self.exchange.options is not None:
+                    logger.warning(
+                        "Exchange options are not a dict (%s); resetting to empty dict.",
+                        type(self.exchange.options).__name__,
+                    )
+                self.exchange.options = {}
+            self.exchange.options.setdefault("adjustForTimeDifference", True)
+            self.exchange.nonce = self._next_nonce
 
         logger.info(
             "CryptoTrader initialised — exchange=%s paper_trading=%s "
@@ -106,6 +121,33 @@ class CryptoTrader:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _next_nonce(self) -> int:
+        """
+        Return a process-local strictly increasing nonce for Kraken requests.
+        """
+        # Kraken requires monotonically increasing integers.  We use wall-clock
+        # nanoseconds converted to milliseconds for high entropy and then clamp
+        # to ``last + 1`` when calls are too close together or the clock shifts.
+        nonce_candidate = time.time_ns() // _NANOS_PER_MILLISECOND
+        with self._nonce_lock:
+            if nonce_candidate <= self._last_nonce:
+                nonce_candidate = self._last_nonce + 1
+            self._last_nonce = nonce_candidate
+            return nonce_candidate
+
+    def _resync_exchange_clock(self) -> bool:
+        """
+        Ask the exchange to refresh server time offset when supported.
+        """
+        load_time_difference = getattr(self.exchange, "load_time_difference", None)
+        if callable(load_time_difference):
+            try:
+                load_time_difference()
+                return True
+            except Exception as exc:
+                logger.debug("Failed to refresh exchange time offset: %s", exc)
+        return False
 
     def _validate_buy_amount(self, amount_usd: float) -> None:
         """
@@ -194,15 +236,18 @@ class CryptoTrader:
                 return order_fn(*args, **kwargs)
             except ccxt.InvalidNonce as exc:
                 last_exc = exc
+                resynced = self._resync_exchange_clock()
+                retry_delay = _NONCE_RETRY_DELAY * attempt
                 logger.warning(
-                    "Invalid nonce on attempt %d/%d — retrying in %.1fs (%s)",
+                    "Invalid nonce on attempt %d/%d — retrying in %.1fs (resynced=%s, %s)",
                     attempt,
                     _NONCE_RETRY_ATTEMPTS,
-                    _NONCE_RETRY_DELAY,
+                    retry_delay,
+                    resynced,
                     exc,
                 )
                 if attempt < _NONCE_RETRY_ATTEMPTS:
-                    time.sleep(_NONCE_RETRY_DELAY)
+                    time.sleep(retry_delay)
         raise last_exc  # type: ignore[misc]
 
     # ------------------------------------------------------------------
