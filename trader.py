@@ -97,8 +97,7 @@ class CryptoTrader:
             }
         )
         if exchange_id == "kraken":
-            options = getattr(self.exchange, "options", None)
-            if not isinstance(options, dict):
+            if not hasattr(self.exchange, "options") or not isinstance(self.exchange.options, dict):
                 self.exchange.options = {}
             self.exchange.options.setdefault("adjustForTimeDifference", True)
             self.exchange.nonce = self._next_nonce

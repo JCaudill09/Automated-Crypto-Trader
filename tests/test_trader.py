@@ -829,7 +829,10 @@ class TestExecuteOrderRetry(unittest.TestCase):
             self.trader._execute_order(order_fn, "BTC/USD", 0.001)
         self.assertEqual(order_fn.call_count, trader_module._NONCE_RETRY_ATTEMPTS)
         self.assertEqual(mock_sleep.call_count, trader_module._NONCE_RETRY_ATTEMPTS - 1)
-        mock_sleep.assert_has_calls([unittest.mock.call(1.0), unittest.mock.call(2.0)])
+        mock_sleep.assert_has_calls([
+            unittest.mock.call(trader_module._NONCE_RETRY_DELAY * 1),
+            unittest.mock.call(trader_module._NONCE_RETRY_DELAY * 2),
+        ])
 
     @patch("trader.time.sleep")
     def test_non_nonce_exception_is_not_retried(self, mock_sleep):
