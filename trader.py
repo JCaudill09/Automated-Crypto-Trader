@@ -201,7 +201,8 @@ class CryptoTrader:
                     _NONCE_RETRY_DELAY,
                     exc,
                 )
-                time.sleep(_NONCE_RETRY_DELAY)
+                if attempt < _NONCE_RETRY_ATTEMPTS:
+                    time.sleep(_NONCE_RETRY_DELAY)
         raise last_exc  # type: ignore[misc]
 
     # ------------------------------------------------------------------

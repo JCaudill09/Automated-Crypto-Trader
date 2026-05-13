@@ -796,7 +796,7 @@ class TestExecuteOrderRetry(unittest.TestCase):
         with self.assertRaises(ccxt.InvalidNonce):
             self.trader._execute_order(order_fn, "BTC/USD", 0.001)
         self.assertEqual(order_fn.call_count, trader_module._NONCE_RETRY_ATTEMPTS)
-        self.assertEqual(mock_sleep.call_count, trader_module._NONCE_RETRY_ATTEMPTS)
+        self.assertEqual(mock_sleep.call_count, trader_module._NONCE_RETRY_ATTEMPTS - 1)
 
     @patch("trader.time.sleep")
     def test_non_nonce_exception_is_not_retried(self, mock_sleep):
