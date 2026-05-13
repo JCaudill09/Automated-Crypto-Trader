@@ -78,6 +78,9 @@ class TestConfig(unittest.TestCase):
     def test_rsi_overbought(self):
         self.assertEqual(config.RSI_OVERBOUGHT, 70)
 
+    def test_rsi_buy_threshold(self):
+        self.assertEqual(config.RSI_BUY_THRESHOLD, 40)
+
 
 # ---------------------------------------------------------------------------
 # Exchange ID normalisation tests
@@ -432,6 +435,7 @@ class TestGetIndicators(unittest.TestCase):
         self.assertIn("ema200", result)
         self.assertIn("prev_ema50", result)
         self.assertIn("prev_ema200", result)
+        self.assertIn("rsi", result)
 
     def test_price_equals_last_close(self):
         n = config.SIMPLE_ALGO_LONG_PERIOD + config.RSI_PERIOD + 10
@@ -455,8 +459,8 @@ class TestGetIndicators(unittest.TestCase):
 class TestShouldBuy(unittest.TestCase):
     SYMBOL = "BTC/USD"
 
-    def _set_indicators(self, trader, price, ema50, ema200, prev_ema50, prev_ema200):
-        """Patch get_indicators to return controlled EMA crossover values."""
+    def _set_indicators(self, trader, price, ema50, ema200, prev_ema50, prev_ema200, rsi=50.0):
+        """Patch get_indicators to return controlled indicator values."""
         trader.get_indicators = MagicMock(
             return_value={
                 "price": price,
@@ -464,6 +468,7 @@ class TestShouldBuy(unittest.TestCase):
                 "ema200": ema200,
                 "prev_ema50": prev_ema50,
                 "prev_ema200": prev_ema200,
+                "rsi": rsi,
             }
         )
 
@@ -472,7 +477,8 @@ class TestShouldBuy(unittest.TestCase):
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
                              ema50=105.0, ema200=100.0,
-                             prev_ema50=95.0, prev_ema200=100.0)
+                             prev_ema50=95.0, prev_ema200=100.0,
+                             rsi=50.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
     def test_buy_signal_when_prev_ema50_exactly_equals_prev_ema200(self):
@@ -480,16 +486,18 @@ class TestShouldBuy(unittest.TestCase):
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
                              ema50=105.0, ema200=100.0,
-                             prev_ema50=100.0, prev_ema200=100.0)
+                             prev_ema50=100.0, prev_ema200=100.0,
+                             rsi=50.0)
         self.assertTrue(trader.should_buy(self.SYMBOL))
 
-    def test_no_signal_when_ema50_already_above_ema200(self):
-        # Already crossed (no new cross)
+    def test_signal_fires_when_in_established_uptrend(self):
+        # ema50 already above ema200 AND price above ema50 → signal fires
+        # (trend-confirmation fires on every qualifying candle, not just crossover)
         trader = _make_trader()
         self._set_indicators(trader, price=110.0,
                              ema50=108.0, ema200=100.0,
                              prev_ema50=105.0, prev_ema200=100.0)
-        self.assertFalse(trader.should_buy(self.SYMBOL))
+        self.assertTrue(trader.should_buy(self.SYMBOL))
 
     def test_no_signal_when_ema50_below_ema200(self):
         # Downtrend: ema50 below ema200 on both candles
@@ -506,6 +514,32 @@ class TestShouldBuy(unittest.TestCase):
                              ema50=95.0, ema200=100.0,
                              prev_ema50=105.0, prev_ema200=100.0)
         self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_price_below_short_ema(self):
+        # ema50 above ema200 (uptrend) but price < ema50 → price lagging, no signal
+        trader = _make_trader()
+        self._set_indicators(trader, price=100.0,
+                             ema50=105.0, ema200=95.0,
+                             prev_ema50=103.0, prev_ema200=95.0)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_no_signal_when_rsi_below_threshold(self):
+        # All EMAs bullish but RSI too low → no signal
+        trader = _make_trader()
+        self._set_indicators(trader, price=110.0,
+                             ema50=105.0, ema200=100.0,
+                             prev_ema50=95.0, prev_ema200=100.0,
+                             rsi=39.9)
+        self.assertFalse(trader.should_buy(self.SYMBOL))
+
+    def test_signal_fires_with_rsi_just_above_threshold(self):
+        # RSI exactly one tick above threshold → signal fires
+        trader = _make_trader()
+        self._set_indicators(trader, price=110.0,
+                             ema50=105.0, ema200=100.0,
+                             prev_ema50=95.0, prev_ema200=100.0,
+                             rsi=40.1)
+        self.assertTrue(trader.should_buy(self.SYMBOL))
 
 
 # ---------------------------------------------------------------------------

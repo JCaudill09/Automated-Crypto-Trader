@@ -30,28 +30,25 @@ EMA_PERIOD     = 200   # 200-period Exponential Moving Average
 RSI_PERIOD     = 14    # RSI look-back period (Wilder smoothing)
 RSI_OVERSOLD   = 50    # RSI below this level → considered oversold (reference threshold)
 RSI_OVERBOUGHT = 70    # RSI above this level → overbought (potential sell)
+RSI_BUY_THRESHOLD = 40 # Minimum RSI required to confirm bullish momentum for a buy signal
 
 # ATR (Average True Range) settings
 ATR_PERIOD              = 14   # Look-back period for ATR computation
 ATR_STOP_LOSS_MULTIPLIER = 1.5  # Stop-loss distance = ATR_STOP_LOSS_MULTIPLIER × ATR
 
-# EMA golden-cross signal — EMA 50 crossing above EMA 200 (golden cross) indicates a bullish trend
-SIMPLE_ALGO_SHORT_PERIOD = 50    # Short-term EMA period (EMA 50)
+# EMA trend-confirmation signal — short EMA above long EMA with price above short EMA
+SIMPLE_ALGO_SHORT_PERIOD = 20    # Short-term EMA period (EMA 20)
 SIMPLE_ALGO_LONG_PERIOD  = 200   # Long-term EMA period (EMA 200)
 
 # Bollinger Bands settings
 BB_PERIOD  = 20   # Look-back period for Bollinger Bands
 BB_NUM_STD = 1.5  # Number of standard deviations for the upper/lower bands
 
-# Keltner Channel settings
-KC_PERIOD     = 20   # EMA period and ATR period for Keltner Channels
-KC_MULTIPLIER = 2.5  # Upper/lower channel distance = KC_MULTIPLIER × ATR
-
 # Relative Volume (RVOL) settings
 # RVOL = current candle volume / average volume over the preceding RVOL_PERIOD candles.
 # A high RVOL indicates that the current candle is seeing unusually heavy participation.
 RVOL_PERIOD    = 20   # Number of prior candles used to compute the average volume
-RVOL_THRESHOLD = 5.0  # Buy signal requires current volume ≥ RVOL_THRESHOLD × average
+RVOL_THRESHOLD = 1.5  # Buy signal requires current volume ≥ RVOL_THRESHOLD × average
 
 # Volume Profile HD settings
 VOLUME_PROFILE_BINS = 50  # Number of equal-width price bins for the volume profile
@@ -72,7 +69,7 @@ SYMBOL_REFRESH_INTERVAL = 3600  # 1 hour
 # Maximum allowed bid-ask spread expressed as a fraction of the ask price.
 # A spread above this threshold indicates insufficient liquidity or a
 # market-maker-dominated book, and no buy order or buy signal is issued.
-MAX_BID_ASK_SPREAD_PCT = 0.005  # 0.5 %
+MAX_BID_ASK_SPREAD_PCT = 0.01  # 1.0 %
 
 # ---------------------------------------------------------------------------
 # Order bundles
