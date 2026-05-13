@@ -830,7 +830,7 @@ class TestExecuteOrderRetry(unittest.TestCase):
         self.assertEqual(order_fn.call_count, trader_module._NONCE_RETRY_ATTEMPTS)
         self.assertEqual(mock_sleep.call_count, trader_module._NONCE_RETRY_ATTEMPTS - 1)
         mock_sleep.assert_has_calls([
-            unittest.mock.call(trader_module._NONCE_RETRY_DELAY * 1),
+            unittest.mock.call(trader_module._NONCE_RETRY_DELAY),
             unittest.mock.call(trader_module._NONCE_RETRY_DELAY * 2),
         ])
 

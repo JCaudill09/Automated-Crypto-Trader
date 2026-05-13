@@ -40,6 +40,8 @@ _NONCE_RETRY_ATTEMPTS = 3
 # Seconds to wait between nonce-retry attempts to allow the exchange clock to
 # advance past the previously accepted nonce.
 _NONCE_RETRY_DELAY = 1.0
+# Conversion factor from nanoseconds to milliseconds.
+_NANOS_PER_MILLISECOND = 1_000_000
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +121,7 @@ class CryptoTrader:
         """
         Return a process-local strictly increasing nonce for Kraken requests.
         """
-        nonce_candidate = time.time_ns() // 1_000_000
+        nonce_candidate = time.time_ns() // _NANOS_PER_MILLISECOND
         with self._nonce_lock:
             if nonce_candidate <= self._last_nonce:
                 nonce_candidate = self._last_nonce + 1
